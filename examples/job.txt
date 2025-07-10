@@ -1,0 +1,42 @@
+Senior Backend Engineer - Cloud Infrastructure
+
+Company: CloudTech Solutions
+Location: Remote
+Salary: $120,000 - $160,000
+
+About the Role:
+We are seeking a Senior Backend Engineer to join our cloud infrastructure team. You will be responsible for designing and implementing scalable backend services that power our cloud platform used by thousands of customers worldwide.
+
+Key Responsibilities:
+• Design and develop high-performance backend services using Go
+• Build and maintain microservices architecture on AWS
+• Implement robust APIs with proper authentication and rate limiting
+• Optimize database performance and design efficient data models
+• Collaborate with DevOps team on CI/CD pipelines and deployment strategies
+• Monitor system performance and troubleshoot production issues
+• Mentor junior engineers and participate in technical decision making
+
+Required Qualifications:
+• 4+ years of experience in backend development
+• Strong proficiency in Go programming language
+• Experience with microservices architecture and containerization (Docker/Kubernetes)
+• Solid understanding of RESTful API design principles
+• Experience with cloud platforms, preferably AWS
+• Knowledge of database systems (PostgreSQL, Redis)
+• Familiarity with CI/CD tools and practices
+• Strong problem-solving skills and attention to detail
+
+Preferred Qualifications:
+• Experience with message queues (RabbitMQ, Apache Kafka)
+• Knowledge of monitoring tools (Prometheus, Grafana)
+• Experience with Infrastructure as Code (Terraform)
+• Understanding of security best practices
+• Previous experience in a startup or fast-paced environment
+
+What We Offer:
+• Competitive salary and equity package
+• Comprehensive health, dental, and vision insurance
+• Flexible work arrangements and unlimited PTO
+• Professional development budget
+• State-of-the-art equipment and home office setup
+• Collaborative and inclusive work environment

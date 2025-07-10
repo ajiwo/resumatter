@@ -1,0 +1,42 @@
+# Senior Financial Analyst Position
+
+## Company: GlobalCorp Financial Services
+## Location: Jakarta Pusat
+## Employment Type: Full-time
+## Salary Range: Rp 15,000,000 - Rp 22,000,000
+
+### About the Role:
+We are seeking an experienced Senior Financial Analyst to join our investment team. The successful candidate will be responsible for conducting complex financial modeling, market analysis, and investment research to support our portfolio management decisions.
+
+### Key Responsibilities:
+- Develop sophisticated financial models for equity and bond valuations
+- Conduct comprehensive industry and company analysis using Bloomberg Terminal
+- Prepare detailed investment reports and presentations for senior management
+- Monitor portfolio performance and risk metrics using advanced analytics
+- Collaborate with portfolio managers on investment strategy and asset allocation
+- Perform due diligence on potential investment opportunities
+- Create automated reporting dashboards using Python and SQL
+
+### Required Qualifications:
+- Bachelor's degree in Finance, Economics, or related field; CFA Level II preferred
+- Minimum 4-5 years of experience in financial analysis or investment research
+- Advanced proficiency in Excel financial modeling and VBA programming
+- Experience with Bloomberg Terminal and FactSet
+- Strong knowledge of Python, R, or MATLAB for quantitative analysis
+- Solid understanding of derivatives, fixed income, and equity markets
+- Professional certification (CFA, FRM) strongly preferred
+- Fluent in English and Bahasa Indonesia
+
+### Preferred Qualifications:
+- Master's degree in Finance or MBA
+- Experience with alternative investments (private equity, hedge funds)
+- Knowledge of ESG investing principles
+- Previous experience in buy-side investment management
+- Strong presentation skills and client-facing experience
+
+### What We Offer:
+- Competitive salary with performance-based bonuses
+- Comprehensive health and dental insurance
+- Professional development and CFA exam support
+- Modern office facilities in SCBD area
+- Career advancement opportunities in regional markets

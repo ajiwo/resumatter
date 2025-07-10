@@ -1,0 +1,340 @@
+# Example configuration file for resumatter
+# Copy this to config.yaml and modify as needed
+
+ai:
+  # Global/fallback AI configuration (for backward compatibility)
+  provider: "gemini"
+  apiKey: ""                      # Your Gemini API key (can also use GEMINI_API_KEY env var)
+  model: "gemini-2.0-flash"       # Gemini model to use
+  temperature: 0.7                # Creativity level (0.0-1.0)
+  maxTokens: 8192                 # Maximum tokens in response
+  timeout: 30s                    # Request timeout
+  useSystemPrompts: true          # Enable system prompts for better control
+  
+  # Operation-specific AI configurations (override global settings)
+  tailor:
+    provider: "gemini"
+    apiKey: ""                    # Operation-specific API key (optional)
+    model: "gemini-2.0-flash"
+    temperature: 0.7
+    maxTokens: 8192
+    timeout: 30s
+    useSystemPrompts: true
+    
+    # Custom prompts for tailoring (optional)
+    customPrompts:
+      systemPrompts:
+        tailorResumeFile: ""      # Path to custom system prompt file
+      userPrompts:
+        tailorResumeFile: ""      # Path to custom user prompt file
+  
+  evaluate:
+    provider: "gemini"
+    apiKey: ""
+    model: "gemini-2.0-flash"
+    temperature: 0.3              # Lower temperature for more consistent evaluation
+    maxTokens: 8192
+    timeout: 30s
+    useSystemPrompts: true
+    
+    customPrompts:
+      systemPrompts:
+        evaluateResumeFile: ""
+      userPrompts:
+        evaluateResumeFile: ""
+  
+  analyze:
+    provider: "gemini"
+    apiKey: ""
+    model: "gemini-2.0-flash"
+    temperature: 0.5
+    maxTokens: 8192
+    timeout: 30s
+    useSystemPrompts: true
+    
+    customPrompts:
+      systemPrompts:
+        analyzeJobFile: ""
+      userPrompts:
+        analyzeJobFile: ""
+
+# Circuit breaker configuration for fault tolerance
+circuitBreaker:
+  enabled: true
+  failureThreshold: 5             # Number of failures before opening circuit
+  resetTimeout: 60s               # Time before attempting to close circuit
+  halfOpenMaxCalls: 3             # Max calls allowed in half-open state
+  
+  # Per-operation circuit breaker settings
+  operations:
+    tailor:
+      enabled: true
+      failureThreshold: 5
+      resetTimeout: 60s
+      halfOpenMaxCalls: 3
+    
+    evaluate:
+      enabled: true
+      failureThreshold: 5
+      resetTimeout: 60s
+      halfOpenMaxCalls: 3
+    
+    analyze:
+      enabled: true
+      failureThreshold: 5
+      resetTimeout: 60s
+      halfOpenMaxCalls: 3
+
+# Server configuration
+server:
+  host: "localhost"
+  port: "8080"
+  readTimeout: 30s
+  writeTimeout: 30s
+  idleTimeout: 120s
+  
+  # TLS Configuration
+  tls:
+    mode: "disabled"              # TLS mode: "disabled", "server", "mutual"
+    certFile: ""                  # Server certificate file (PEM)
+    keyFile: ""                   # Server private key file (PEM)
+    caFile: ""                    # CA certificate file (required for mutual mode)
+    minVersion: "1.2"             # Minimum TLS version: "1.2", "1.3"
+    clientAuthPolicy: "require"   # Client auth policy for mutual mode: "require", "request", "verify"
+    cipherSuites: []              # Custom cipher suites (optional, uses Go defaults if empty)
+    insecureSkipVerify: false     # Skip certificate verification (development only)
+    serverName: ""                # Expected server name for client connections
+    
+    # Auto-reload configuration for zero-downtime certificate updates
+    autoReload:
+      enabled: true               # Enable automatic certificate reloading
+      checkInterval: 30s          # Interval for checking certificate expiry
+      preemptiveRenewal: 72h      # Renew certificates this duration before expiry
+      
+      # File-based certificate watching
+      fileWatcher:
+        enabled: true             # Enable file system watching for certificate changes
+        debounceDelay: 1s         # Debounce delay for file change events (prevents rapid reloads)
+      
+      # Vault-based certificate watching
+      vaultWatcher:
+        enabled: false            # Enable Vault secret watching
+        pollInterval: 5m          # Polling interval for Vault secrets
+        secretPath: ""            # Vault secret path for TLS certificates
+  
+  # API Authentication
+  apiKeys: []
+  
+  # Rate Limiting Configuration
+  rateLimit:
+    enabled: false  # Set to true to enable rate limiting
+    requestsPerMin: 60  # Maximum requests per minute
+    burstCapacity: 10   # Burst capacity for sudden traffic spikes
+    byIP: true          # Enable per-IP rate limiting
+    byAPIKey: false     # Enable per-API-key rate limiting (useful when API keys are configured)
+    window: 60s         # Rate limiting window duration
+
+app:
+  logLevel: "info"
+  defaultFormat: "json"
+  supportedFormats: ["json", "text", "markdown"]
+  maxFileSize: 1048576 # 1MB in bytes
+
+# OpenTelemetry Observability Configuration
+observability:
+  # Core settings
+  enabled: true
+  serviceName: "resumatter"
+  serviceVersion: "1.0.0"  # Uses app version if not specified
+  
+  # Tracing configuration
+  tracing:
+    enabled: true
+    sampleRate: 1.0  # 0.0 to 1.0 (1.0 = 100% sampling)
+                     # Traces include detailed attributes: model info, temperature, input/output sizes,
+                     # operation results, and performance metrics for comprehensive observability
+    
+  # Metrics configuration
+  metrics:
+    enabled: true
+    collectionInterval: "15s"
+    
+  # Console output (development)
+  console:
+    enabled: false  # Set to true for development debugging
+    prettyPrint: true
+    
+  # Prometheus metrics exporter
+  prometheus:
+    enabled: true
+    endpoint: "/metrics"
+    port: "9090"
+    
+  # OTLP exporter (for Jaeger, Zipkin, cloud providers, etc.)
+  # Exports both traces and metrics to OTLP-compatible backends
+  otlp:
+    enabled: false
+    endpoint: "http://localhost:4318"  # Standard OTLP HTTP endpoint
+    insecure: true                     # Use HTTP instead of HTTPS (dev only)
+    headers:                           # Custom headers for authentication
+      # authorization: "Bearer your-token"
+      # x-api-key: "your-api-key"
+    
+  # Custom metrics configuration
+  customMetrics:
+    # AI operation metrics
+    aiOperations:
+      enabled: true
+      trackDuration: true
+      trackTokenUsage: true
+      
+    # Business metrics
+    businessMetrics:
+      enabled: true
+      trackSuccessRates: true
+      # Business metrics are enriched with detailed attributes like 'ats_score',
+      # 'findings_count', 'quality_score' for powerful analytical queries
+      
+    # Infrastructure metrics
+    infrastructure:
+      enabled: true
+      trackRateLimits: true
+      trackCertExpiry: true       # Exposes 'resumatter_cert_expiry_seconds' Prometheus gauge for proactive
+                                  # certificate expiry monitoring and alerting
+
+# Vault Configuration (optional)
+# When enabled, secrets will be fetched from a Vault KV Version 2 engine at startup
+# NOTE: Only KV Version 2 is supported. KV Version 1 is NOT supported.
+# Note: For apiKeys secret in Vault, provide a single string with comma-separated values
+# Example Vault secret format:
+# apiKeys: "key1,key2,key3"
+# The first key will be used as the primary key, others as fallbacks
+#
+# Configuration Precedence (highest to lowest):
+# 1. Vault secrets (if configured)
+# 2. Environment variables (e.g., RESUMATTER_VAULT_SECRETS_APIKEYS)
+# 3. Values in this config file
+# 4. Default values
+
+vault:
+  enabled: false                    # Set to true to enable Vault integration
+  address: "http://localhost:8200" # Vault server address
+  token: ""                         # Vault token (can also use VAULT_TOKEN env var)
+  
+  # Authentication methods (choose one)
+  auth:
+    # Token authentication (simplest)
+    token:
+      enabled: true
+      token: ""                     # Vault token (can also use VAULT_TOKEN env var)
+    
+    # AppRole authentication
+    appRole:
+      enabled: false
+      roleId: ""                    # AppRole role ID (can also use VAULT_ROLE_ID env var)
+      secretId: ""                  # AppRole secret ID (can also use VAULT_SECRET_ID env var)
+      mountPath: "approle"          # AppRole mount path
+    
+    # Kubernetes authentication
+    kubernetes:
+      enabled: false
+      role: ""                      # Kubernetes role
+      mountPath: "kubernetes"       # Kubernetes auth mount path
+      tokenPath: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  
+  # Secret configuration
+  secrets:
+    # KV Version 2 engine configuration
+    kv2:
+      enabled: true
+      mountPath: "secret"           # KV v2 mount path
+      secretPath: "resumatter"      # Path to secret within the mount
+    
+    # Specific secret mappings
+    apiKeys:
+      enabled: true
+      path: "secret/data/resumatter" # Full path to secret
+      key: "apiKeys"                # Key within the secret
+    
+    geminiApiKey:
+      enabled: true
+      path: "secret/data/resumatter"
+      key: "geminiApiKey"
+
+# Monitoring Examples (for reference)
+# These are example configurations for setting up monitoring dashboards and alerts
+# Copy and adapt these to your monitoring infrastructure
+
+monitoring:
+  # Grafana dashboard configuration
+  grafana:
+    # Example dashboard panels
+    panels:
+      # AI Operations Dashboard
+      - title: "AI Request Rate"
+        query: "rate(resumatter_ai_requests_total[5m])"
+        type: "graph"
+      
+      - title: "AI Processing Time"
+        query: "histogram_quantile(0.95, rate(resumatter_ai_processing_seconds_bucket[5m]))"
+        type: "graph"
+      
+      - title: "Token Usage"
+        query: "rate(resumatter_ai_tokens_total[5m])"
+        type: "graph"
+      
+      # Business Metrics Dashboard
+      - title: "Resume Tailoring Success Rate"
+        query: "(rate(resumatter_resumes_tailored_total{success=\"true\"}[5m]) / rate(resumatter_resumes_tailored_total[5m])) * 100"
+        type: "stat"
+      
+      - title: "High-Quality Tailored Resumes"
+        query: "rate(resumatter_resumes_tailored_total{ats_score>=\"80\"}[5m])"
+        type: "graph"
+      
+      # Infrastructure Dashboard
+      - title: "Certificate Expiry"
+        query: "resumatter_cert_expiry_seconds / 86400"  # Convert to days
+        type: "stat"
+        alert_threshold: 7  # Alert when less than 7 days
+      
+      - title: "Rate Limit Usage"
+        query: "rate(resumatter_rate_limit_exceeded_total[5m])"
+        type: "graph"
+  
+  # Alerting configuration examples
+  alerting:
+    rules:
+      # High error rate alert
+      - alert: "HighAIErrorRate"
+        expr: "rate(resumatter_ai_errors_total[5m]) > 0.1"
+        for: "2m"
+        labels:
+          severity: "warning"
+        annotations:
+          summary: "High AI operation error rate detected"
+      
+      # Certificate expiry alert
+      - alert: "CertificateExpiringSoon"
+        expr: "resumatter_cert_expiry_seconds < 604800"  # 7 days in seconds
+        for: "0m"
+        labels:
+          severity: "critical"
+        annotations:
+          summary: "TLS certificate expires in less than 7 days"
+      
+      # Low success rate alert
+      - alert: "LowTailoringSuccessRate"
+        expr: "(rate(resumatter_resumes_tailored_total{success=\"true\"}[10m]) / rate(resumatter_resumes_tailored_total[10m])) < 0.8"
+        for: "5m"
+        labels:
+          severity: "warning"
+        annotations:
+          summary: "Resume tailoring success rate below 80%"
+
+# Example Prometheus queries for monitoring:
+# - AI Request Rate: rate(resumatter_ai_requests_total[5m])
+# - AI Error Rate: rate(resumatter_ai_errors_total[5m]) / rate(resumatter_ai_requests_total[5m])
+# - Token Usage Rate: rate(resumatter_ai_tokens_total[5m])
+# - Processing Time P95: histogram_quantile(0.95, rate(resumatter_ai_processing_seconds_bucket[5m]))
+# - Success Rate: (rate(resumatter_resumes_tailored_total{success="true"}[5m]) / rate(resumatter_resumes_tailored_total[5m])) * 100

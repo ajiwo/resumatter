@@ -1,0 +1,49 @@
+# Example configuration with custom prompts
+# Note: File paths can be:
+# - Absolute paths (recommended for services): /path/to/prompts/system.tailor.md
+# - Relative to executable location: ./examples/prompts/system.tailor.md
+
+# Configuration values here can be overridden by Vault secrets if configured
+# See main config.example.yaml for full configuration options and precedence
+
+ai:
+  provider: "gemini"
+  model: "gemini-2.0-flash"
+  apiKey: "your-api-key-here"
+  
+  # Operation-specific configurations with custom prompts from files
+  tailor:
+    model: "gemini-2.5-pro"
+    temperature: 0.3
+    customPrompts:
+      systemPrompts:
+        tailorResumeFile: "./examples/prompts/system.tailor.md"
+      userPrompts:
+        tailorResumeFile: "./examples/prompts/user.tailor.md"
+  
+  evaluate:
+    model: "gemini-2.0-flash-lite"
+    temperature: 0.1
+    customPrompts:
+      systemPrompts:
+        evaluateResumeFile: "./examples/prompts/system.evaluate.md"
+      userPrompts:
+        evaluateResumeFile: "./examples/prompts/user.evaluate.md"
+  
+  analyze:
+    model: "gemini-1.5-pro"
+    temperature: 0.2
+    customPrompts:
+      systemPrompts:
+        analyzeJobFile: "./examples/prompts/system.analyze.md"
+      userPrompts:
+        analyzeJobFile: "./examples/prompts/user.analyze.md"
+
+# Standard server and app configuration
+server:
+  host: "localhost"
+  port: "8080"
+
+app:
+  logLevel: "info"
+  defaultFormat: "json"

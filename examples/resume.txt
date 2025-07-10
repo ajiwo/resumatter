@@ -1,0 +1,35 @@
+John Doe
+Software Engineer
+john.doe@email.com | (555) 123-4567 | LinkedIn: linkedin.com/in/johndoe
+
+SUMMARY
+Experienced software engineer with 5 years of experience in full-stack web development. Proficient in JavaScript, Python, and Go. Strong background in building scalable web applications and RESTful APIs.
+
+EXPERIENCE
+
+Senior Software Engineer | TechCorp Inc. | 2022 - Present
+• Developed and maintained microservices architecture using Go and Docker
+• Built RESTful APIs serving 10,000+ daily active users
+• Implemented automated testing strategies reducing bug reports by 40%
+• Collaborated with cross-functional teams to deliver features on time
+
+Software Engineer | StartupXYZ | 2020 - 2022
+• Created responsive web applications using React and Node.js
+• Optimized database queries resulting in 30% performance improvement
+• Participated in code reviews and mentored junior developers
+• Worked with PostgreSQL and MongoDB databases
+
+Junior Developer | WebSolutions | 2019 - 2020
+• Assisted in developing client websites using HTML, CSS, and JavaScript
+• Fixed bugs and implemented minor features
+• Learned version control with Git and agile development practices
+
+EDUCATION
+Bachelor of Science in Computer Science | State University | 2019
+
+SKILLS
+• Programming Languages: JavaScript, Python, Go, HTML, CSS
+• Frameworks: React, Node.js, Express.js
+• Databases: PostgreSQL, MongoDB, MySQL
+• Tools: Docker, Git, AWS, Jenkins
+• Methodologies: Agile, Test-Driven Development

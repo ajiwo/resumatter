@@ -1,0 +1,334 @@
+# Do not use this config file, it's for reference only
+# Example configuration file for resumatter
+# Copy this to config.yaml and modify as needed
+
+ai:
+  # Global/fallback AI configuration (for backward compatibility)
+  provider: "genai-gemini"        # genai-gemini (free), genai-vertexai (paid)
+  model: "gemini-2.0-flash"
+  timeout: 60s
+  apiKey: "your-api-key-here"
+  maxRetries: 3
+  temperature: 0.7
+  useSystemPrompts: true
+  
+  # Operation-specific AI configurations
+  tailor:
+    provider: "genai-gemini"
+    model: "gemini-2.5-pro"        # More powerful model for complex tailoring
+    timeout: 90s                   # Longer timeout for complex operations
+    apiKey: "your-api-key-here"    # Can use same or different API key
+    maxRetries: 2
+    temperature: 0.3               # Lower temperature for consistency
+    useSystemPrompts: true
+    customPrompts:
+      systemPrompts:
+        tailorResume: ""           # Custom system prompt for tailoring (optional)
+        tailorResumeFile: ""       # Load system prompt from file (optional, overrides tailorResume)
+      userPrompts:
+        tailorResume: ""           # Custom user prompt template for tailoring (optional)
+        tailorResumeFile: ""       # Load user prompt from file (optional, overrides tailorResume)
+    
+    # Circuit breaker configuration (enabled by default for resilience)
+    circuitBreaker:
+      enabled: true                # Enable circuit breaker protection
+      maxRequests: 3               # Max requests allowed when half-open
+      interval: 60s                # Interval to clear failure counts
+      timeout: 60s                 # Timeout before attempting recovery
+      minRequests: 3               # Minimum requests before circuit can trip
+      failureThreshold: 0.6        # Trip when 60% of requests fail
+  
+  evaluate:
+    provider: "genai-gemini"
+    model: "gemini-2.0-flash-lite" # Faster model for evaluation
+    timeout: 60s                   # Standard timeout
+    apiKey: "your-api-key-here"    # Can use same or different API key
+    maxRetries: 3
+    temperature: 0.1               # Very low temperature for factual analysis
+    useSystemPrompts: true
+    customPrompts:
+      systemPrompts:
+        evaluateResume: ""         # Custom system prompt for evaluation (optional)
+        evaluateResumeFile: ""     # Load system prompt from file (optional, overrides evaluateResume)
+      userPrompts:
+        evaluateResume: ""         # Custom user prompt template for evaluation (optional)
+        evaluateResumeFile: ""     # Load user prompt from file (optional, overrides evaluateResume)
+    
+    # Circuit breaker configuration (enabled by default for resilience)
+    circuitBreaker:
+      enabled: true                # Enable circuit breaker protection
+      maxRequests: 3               # Max requests allowed when half-open
+      interval: 60s                # Interval to clear failure counts
+      timeout: 60s                 # Timeout before attempting recovery
+      minRequests: 3               # Minimum requests before circuit can trip
+      failureThreshold: 0.6        # Trip when 60% of requests fail
+  
+  analyze:
+    provider: "genai-gemini"
+    model: "gemini-1.5-pro"        # More powerful model for comprehensive analysis
+    timeout: 75s                   # Moderate timeout for analysis operations
+    apiKey: "your-api-key-here"    # Can use same or different API key
+    maxRetries: 2
+    temperature: 0.2               # Low temperature for consistent analysis
+    useSystemPrompts: true
+    customPrompts:
+      systemPrompts:
+        analyzeJob: ""             # Custom system prompt for job analysis (optional)
+        analyzeJobFile: ""         # Load system prompt from file (optional, overrides analyzeJob)
+      userPrompts:
+        analyzeJob: ""             # Custom user prompt template for job analysis (optional)
+        analyzeJobFile: ""         # Load user prompt from file (optional, overrides analyzeJob)
+    
+    # Circuit breaker configuration (enabled by default for resilience)
+    circuitBreaker:
+      enabled: true                # Enable circuit breaker protection
+      maxRequests: 3               # Max requests allowed when half-open
+      interval: 60s                # Interval to clear failure counts
+      timeout: 60s                 # Timeout before attempting recovery
+      minRequests: 3               # Minimum requests before circuit can trip
+      failureThreshold: 0.6        # Trip when 60% of requests fail
+
+server:
+  host: "localhost"
+  port: "8080"
+  readTimeout: 30s
+  writeTimeout: 30s
+  idleTimeout: 120s
+  
+  # TLS Configuration
+  tls:
+    mode: "disabled"              # TLS mode: "disabled", "server", "mutual"
+    certFile: ""                  # Server certificate file (PEM)
+    keyFile: ""                   # Server private key file (PEM)
+    caFile: ""                    # CA certificate file (required for mutual mode)
+    minVersion: "1.2"             # Minimum TLS version: "1.2", "1.3"
+    clientAuthPolicy: "require"   # Client auth policy for mutual mode: "require", "request", "verify"
+    cipherSuites: []              # Custom cipher suites (optional, uses Go defaults if empty)
+    insecureSkipVerify: false     # Skip certificate verification (development only)
+    serverName: ""                # Expected server name for client connections
+    
+    # Auto-reload configuration for zero-downtime certificate updates
+    autoReload:
+      enabled: true               # Enable automatic certificate reloading
+      checkInterval: 30s          # Interval for checking certificate expiry
+      preemptiveRenewal: 72h      # Renew certificates this duration before expiry
+      maxRetries: 3               # NOTE: Configuration exists but retry logic implementation is pending
+      retryDelay: 10s             # NOTE: Configuration exists but retry logic implementation is pending
+      
+      # File-based certificate watching
+      fileWatcher:
+        enabled: true             # Enable file system watching for certificate changes
+        debounceDelay: 1s         # Debounce delay for file change events (prevents rapid reloads)
+      
+      # Vault-based certificate watching (for future Vault integration)
+      vaultWatcher:
+        enabled: false            # Enable Vault secret watching
+        pollInterval: 5m          # Polling interval for Vault secrets
+        autoRenew: true           # NOTE: Vault lease renewal functionality is planned for future release
+        renewThreshold: 24h       # NOTE: This setting is not yet implemented
+        secretPath: ""            # Vault secret path for TLS certificates
+  
+  # API Authentication
+  apiKeys: []
+  
+  # Rate Limiting Configuration
+  rateLimit:
+    enabled: false  # Set to true to enable rate limiting
+    requestsPerMin: 60  # Maximum requests per minute
+    burstCapacity: 10   # Burst capacity for sudden traffic spikes
+    byIP: true          # Enable per-IP rate limiting
+    byAPIKey: false     # Enable per-API-key rate limiting (useful when API keys are configured)
+    window: 60s         # Rate limiting window duration
+
+app:
+  logLevel: "info"
+  defaultFormat: "json"
+  supportedFormats: ["json", "text", "markdown"]
+  maxFileSize: 1048576 # 1MB in bytes
+                       # NOTE: Currently enforced for server HTTP endpoints only, not for CLI commands
+
+# OpenTelemetry Observability Configuration
+observability:
+  # Core settings
+  enabled: true
+  serviceName: "resumatter"
+  serviceVersion: "1.0.0"  # Uses app version if not specified
+  
+  # Tracing configuration
+  tracing:
+    enabled: true
+    sampleRate: 1.0  # 0.0 to 1.0 (1.0 = 100% sampling)
+                     # Traces include detailed attributes: model info, temperature, input/output sizes,
+                     # operation results, and performance metrics for comprehensive observability
+    
+  # Metrics configuration
+  metrics:
+    enabled: true
+    collectionInterval: "15s"
+    
+  # Console output (development)
+  console:
+    enabled: false  # Set to true for development debugging
+    prettyPrint: true
+    
+  # Prometheus metrics exporter
+  prometheus:
+    enabled: true
+    endpoint: "/metrics"
+    port: "9090"
+    
+  # OTLP exporter (for Jaeger, Zipkin, cloud providers, etc.)
+  # Exports both traces and metrics to OTLP-compatible backends
+  otlp:
+    enabled: false
+    endpoint: "http://localhost:4318"  # Standard OTLP HTTP endpoint
+    insecure: true                     # Use HTTP instead of HTTPS (dev only)
+    headers:                           # Custom headers for authentication
+      # authorization: "Bearer your-token"
+      # x-api-key: "your-api-key"
+    
+  # Custom metrics configuration
+  customMetrics:
+    # AI operation metrics
+    aiOperations:
+      enabled: true
+      trackDuration: true
+      trackTokenUsage: true
+      trackModelInfo: true        # NOTE: Configuration exists but metric implementation is pending
+      
+    # Business metrics
+    businessMetrics:
+      enabled: true
+      trackSuccessRates: true
+      trackContentSizes: true     # NOTE: Configuration exists but dedicated histogram implementation is pending
+                                  # However, business metrics are enriched with detailed attributes like 'ats_score',
+                                  # 'findings_count', 'quality_score' for powerful analytical queries
+      
+    # Infrastructure metrics
+    infrastructure:
+      enabled: true
+      trackRateLimits: true
+      trackCertExpiry: true       # Exposes 'resumatter_cert_expiry_seconds' Prometheus gauge for proactive
+                                  # certificate expiry monitoring and alerting
+
+# Vault Configuration (optional)
+# When enabled, secrets will be fetched from a Vault KV Version 2 engine at startup
+# NOTE: Only KV Version 2 is supported. KV Version 1 is NOT supported.
+# Note: For apiKeys secret in Vault, provide a single string with comma-separated values
+# Example Vault secret format:
+# apiKeys: "key1,key2,key3"
+# The first key will be used as the primary key, others as fallbacks
+#
+# Configuration Precedence (highest to lowest):
+# 1. Vault secrets (if configured)
+# 2. Environment variables (e.g., RESUMATTER_VAULT_SECRETS_APIKEYS)
+# 3. Values in this config file
+# 4. Default values
+
+vault:
+  enabled: false                    # Set to true to enable Vault integration
+  address: "https://vault.company.com:8200"  # Vault server address
+  token: ""                         # Vault token (or use tokenFile)
+  tokenFile: "/var/secrets/vault-token"      # Path to file containing Vault token
+  namespace: ""                     # Vault namespace (Enterprise feature)
+  
+  # Secret paths in Vault (all optional)
+  secrets:
+    apiKeys: "secret/data/resumatter/api-keys"     # Path to API keys secret
+    geminiKey: "secret/data/resumatter/gemini"     # Path to Gemini API key secret
+    tlsCerts: "secret/data/resumatter/tls"         # Path to TLS certificates secret
+
+# Example Vault secret structure:
+# 
+# For API keys (secret/data/resumatter/api-keys):
+# {
+#   "keys": "sk-resumatter-prod-abc123,sk-resumatter-dev-xyz789"
+# }
+#
+# For Gemini API key (secret/data/resumatter/gemini):
+# {
+#   "api_key": "your-gemini-api-key-here"
+# }
+#
+# For TLS certificates (secret/data/resumatter/tls):
+# Store certificate content directly (secure approach)
+# {
+#   "cert": "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----",
+#   "key": "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----",
+#   "ca": "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----"
+# }
+#
+# Note: File path fields (cert_file, key_file, ca_file) are no longer supported in Vault.
+# Use the certificate content fields above instead.
+
+# Monitoring and Alerting Configuration (for reference)
+monitoring:
+  # Grafana dashboard configuration
+  grafana:
+    enabled: false
+    url: "http://localhost:3000"
+    dashboardUid: "resumatter-dashboard"
+    
+  # Alerting configuration
+  alerting:
+    enabled: false
+    
+    # SLI/SLO definitions
+    sliSlo:
+      # API availability target
+      availabilityTarget: 99.9  # 99.9% uptime
+      
+      # Response time targets (percentiles)
+      responseTimeTargets:
+        p50: "500ms"   # 50th percentile under 500ms
+        p95: "2s"      # 95th percentile under 2s
+        p99: "5s"      # 99th percentile under 5s
+        
+      # Error rate targets
+      errorRateTarget: 1.0  # Less than 1% error rate
+      
+    # Alert rules
+    rules:
+      # High error rate alert
+      - name: "high_error_rate"
+        condition: "error_rate > 5%"
+        duration: "5m"
+        severity: "warning"
+        
+      # High response time alert  
+      - name: "high_response_time"
+        condition: "p95_response_time > 3s"
+        duration: "2m"
+        severity: "warning"
+        
+      # AI service down alert
+      - name: "ai_service_down"
+        condition: "ai_availability < 100%"
+        duration: "1m"
+        severity: "critical"
+        
+      # Certificate expiry warning
+      - name: "cert_expiry_warning"
+        condition: "cert_expiry_hours < 168"  # 7 days
+        duration: "0s"
+        severity: "warning"
+
+# Example Prometheus configuration for scraping Resumatter metrics
+# Save this as prometheus.yml and run: prometheus --config.file=prometheus.yml
+#
+# global:
+#   scrape_interval: 15s
+#   evaluation_interval: 15s
+#
+# scrape_configs:
+#   - job_name: 'resumatter'
+#     static_configs:
+#       - targets: ['localhost:9090']
+#     scrape_interval: 15s
+#     metrics_path: /metrics
+#
+# Example Grafana dashboard queries:
+# - AI Processing Time: rate(resumatter_ai_processing_duration_seconds_sum[5m]) / rate(resumatter_ai_processing_duration_seconds_count[5m])
+# - Request Rate: rate(resumatter_ai_requests_total[5m])
+# - Error Rate: rate(resumatter_ai_errors_total[5m]) / rate(resumatter_ai_requests_total[5m])
+# - Success Rate: (rate(resumatter_resumes_tailored_total{success="true"}[5m]) / rate(resumatter_resumes_tailored_total[5m])) * 100

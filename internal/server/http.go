@@ -131,7 +131,33 @@ func NewServer(appCfg *config.Config, cfg ServerConfig, logger *resumatterErrors
 }
 
 func (s *Server) Start() error {
-	// Initialize observability
+	om, err := s.initializeObservability()
+	if err != nil {
+		return err
+	}
+	defer s.shutdownObservability(om)
+
+	httpServer, err := s.setupHTTPServer(om)
+	if err != nil {
+		return err
+	}
+
+	vaultClient, err := s.initializeVaultClient()
+	if err != nil {
+		return err
+	}
+
+	if err := s.configureTLS(httpServer, vaultClient, om); err != nil {
+		return err
+	}
+
+	s.displayServerInfo()
+
+	return s.startWithGracefulShutdown(httpServer)
+}
+
+// initializeObservability sets up observability components
+func (s *Server) initializeObservability() (*observability.ObservabilityManager, error) {
 	obsConfig := observability.ObservabilityConfig{
 		ServiceName:    s.AppConfig.Observability.ServiceName,
 		ServiceVersion: s.Version,
@@ -145,18 +171,41 @@ func (s *Server) Start() error {
 			Port:     s.AppConfig.Observability.Prometheus.Port,
 		},
 	}
+
 	om, err := observability.NewObservabilityManager(obsConfig, s.AppConfig)
 	if err != nil {
-		return fmt.Errorf("failed to initialize observability: %w", err)
+		return nil, fmt.Errorf("failed to initialize observability: %w", err)
 	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := om.Shutdown(ctx); err != nil {
-			s.Logger.LogError(err, "Failed to shutdown observability")
-		}
-	}()
 
+	return om, nil
+}
+
+// shutdownObservability handles observability cleanup
+func (s *Server) shutdownObservability(om *observability.ObservabilityManager) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := om.Shutdown(ctx); err != nil {
+		s.Logger.LogError(err, "Failed to shutdown observability")
+	}
+}
+
+// setupHTTPServer creates and configures the HTTP server
+func (s *Server) setupHTTPServer(om *observability.ObservabilityManager) (*http.Server, error) {
+	mux := s.setupRoutes(om)
+	handler := om.HTTPMiddleware()(mux)
+	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
+
+	return &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  s.ReadTimeout,
+		WriteTimeout: s.WriteTimeout,
+		IdleTimeout:  s.IdleTimeout,
+	}, nil
+}
+
+// setupRoutes configures all HTTP routes and middleware
+func (s *Server) setupRoutes(om *observability.ObservabilityManager) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Add middleware layers with observability
@@ -181,114 +230,134 @@ func (s *Server) Start() error {
 		),
 	)
 
-	// Wrap the entire mux with OpenTelemetry HTTP middleware
-	handler := om.HTTPMiddleware()(mux)
+	return mux
+}
 
-	addr := fmt.Sprintf("%s:%s", s.Host, s.Port)
-
-	// Create HTTP server with configurable timeouts
-	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      handler, // Use instrumented handler
-		ReadTimeout:  s.ReadTimeout,
-		WriteTimeout: s.WriteTimeout,
-		IdleTimeout:  s.IdleTimeout,
+// initializeVaultClient creates a Vault client if needed
+func (s *Server) initializeVaultClient() (VaultClientInterface, error) {
+	if !s.TLSConfig.AutoReload.VaultWatcher.Enabled {
+		return nil, nil
 	}
 
-	// Construct VaultClient if needed
-	var vaultClient VaultClientInterface
-	if s.TLSConfig.AutoReload.VaultWatcher.Enabled {
-		vc, err := config.NewVaultClient(s.AppConfig.Vault, s.Logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize Vault client: %w", err)
-		}
-		vaultClient = vc
+	vc, err := config.NewVaultClient(s.AppConfig.Vault, s.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize Vault client: %w", err)
 	}
 
-	// Configure TLS based on mode
+	return vc, nil
+}
+
+// configureTLS sets up TLS configuration based on the mode
+func (s *Server) configureTLS(httpServer *http.Server, vaultClient VaultClientInterface, om *observability.ObservabilityManager) error {
+	addr := httpServer.Addr
+
 	switch s.TLSConfig.Mode {
 	case "server":
-		fmt.Printf("Starting server with HTTPS (server-only TLS) on https://%s\n", addr)
-		fmt.Println("TLS mode: Server-only (no client certificates required)")
-
-		// Initialize certificate manager if auto-reload is enabled
-		if s.TLSConfig.AutoReload.Enabled {
-			certManager := NewCertificateManager(&s.TLSConfig, &s.TLSConfig.AutoReload, vaultClient, om, s.Logger)
-			if err := certManager.Start(); err != nil {
-				return fmt.Errorf("failed to start certificate manager: %w", err)
-			}
-			s.CertificateManager = certManager
-
-			// Add reload callback to log certificate reloads
-			certManager.AddReloadCallback(func(success bool, err error) {
-				if success {
-					s.Logger.Info("TLS certificates reloaded successfully")
-				} else {
-					s.Logger.LogError(err, "Failed to reload TLS certificates")
-				}
-			})
-
-			fmt.Println("TLS auto-reload: ENABLED")
-			if s.TLSConfig.AutoReload.FileWatcher.Enabled {
-				fmt.Println("  - File watching enabled")
-			}
-			if s.TLSConfig.AutoReload.VaultWatcher.Enabled {
-				fmt.Println("  - Vault watching enabled")
-			}
-		}
-
-		tlsConfig, err := s.buildTLSConfig()
-		if err != nil {
-			return fmt.Errorf("failed to set up TLS: %w", err)
-		}
-		httpServer.TLSConfig = tlsConfig
+		return s.configureServerTLS(httpServer, addr, vaultClient, om)
 	case "mutual":
-		fmt.Printf("Starting server with mTLS (mutual TLS) on https://%s\n", addr)
-		fmt.Println("TLS mode: Mutual (client certificates required)")
-
-		// Initialize certificate manager if auto-reload is enabled
-		if s.TLSConfig.AutoReload.Enabled {
-			certManager := NewCertificateManager(&s.TLSConfig, &s.TLSConfig.AutoReload, vaultClient, om, s.Logger)
-			if err := certManager.Start(); err != nil {
-				return fmt.Errorf("failed to start certificate manager: %w", err)
-			}
-			s.CertificateManager = certManager
-
-			// Add reload callback to log certificate reloads
-			certManager.AddReloadCallback(func(success bool, err error) {
-				if success {
-					s.Logger.Info("TLS certificates reloaded successfully")
-				} else {
-					s.Logger.LogError(err, "Failed to reload TLS certificates")
-				}
-			})
-			fmt.Println("TLS auto-reload: ENABLED")
-			if s.TLSConfig.AutoReload.FileWatcher.Enabled {
-				fmt.Println("  - File watching enabled")
-			}
-			if s.TLSConfig.AutoReload.VaultWatcher.Enabled {
-				fmt.Println("  - Vault watching enabled")
-			}
-		}
-		tlsConfig, err := s.buildTLSConfig()
-		if err != nil {
-			return fmt.Errorf("failed to set up mTLS: %w", err)
-		}
-		httpServer.TLSConfig = tlsConfig
+		return s.configureMutualTLS(httpServer, addr, vaultClient, om)
 	case "disabled":
 		fmt.Printf("Starting server on http://%s\n", addr)
 		fmt.Println("TLS mode: Disabled (HTTP only)")
+		return nil
 	default:
 		return fmt.Errorf("invalid TLS mode: %s (must be 'disabled', 'server', or 'mutual')", s.TLSConfig.Mode)
 	}
+}
 
+// configureServerTLS sets up server-only TLS
+func (s *Server) configureServerTLS(httpServer *http.Server, addr string, vaultClient VaultClientInterface, om *observability.ObservabilityManager) error {
+	fmt.Printf("Starting server with HTTPS (server-only TLS) on https://%s\n", addr)
+	fmt.Println("TLS mode: Server-only (no client certificates required)")
+
+	if err := s.setupCertificateManager(vaultClient, om); err != nil {
+		return err
+	}
+
+	tlsConfig, err := s.buildTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to set up TLS: %w", err)
+	}
+	httpServer.TLSConfig = tlsConfig
+
+	return nil
+}
+
+// configureMutualTLS sets up mutual TLS
+func (s *Server) configureMutualTLS(httpServer *http.Server, addr string, vaultClient VaultClientInterface, om *observability.ObservabilityManager) error {
+	fmt.Printf("Starting server with mTLS (mutual TLS) on https://%s\n", addr)
+	fmt.Println("TLS mode: Mutual (client certificates required)")
+
+	if err := s.setupCertificateManager(vaultClient, om); err != nil {
+		return err
+	}
+
+	tlsConfig, err := s.buildTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to set up mTLS: %w", err)
+	}
+	httpServer.TLSConfig = tlsConfig
+
+	return nil
+}
+
+// setupCertificateManager initializes certificate manager if auto-reload is enabled
+func (s *Server) setupCertificateManager(vaultClient VaultClientInterface, om *observability.ObservabilityManager) error {
+	if !s.TLSConfig.AutoReload.Enabled {
+		return nil
+	}
+
+	certManager := NewCertificateManager(&s.TLSConfig, &s.TLSConfig.AutoReload, vaultClient, om, s.Logger)
+	if err := certManager.Start(); err != nil {
+		return fmt.Errorf("failed to start certificate manager: %w", err)
+	}
+	s.CertificateManager = certManager
+
+	// Add reload callback to log certificate reloads
+	certManager.AddReloadCallback(func(success bool, err error) {
+		if success {
+			s.Logger.Info("TLS certificates reloaded successfully")
+		} else {
+			s.Logger.LogError(err, "Failed to reload TLS certificates")
+		}
+	})
+
+	s.displayAutoReloadInfo()
+
+	return nil
+}
+
+// displayAutoReloadInfo shows auto-reload configuration
+func (s *Server) displayAutoReloadInfo() {
+	fmt.Println("TLS auto-reload: ENABLED")
+	if s.TLSConfig.AutoReload.FileWatcher.Enabled {
+		fmt.Println("  - File watching enabled")
+	}
+	if s.TLSConfig.AutoReload.VaultWatcher.Enabled {
+		fmt.Println("  - Vault watching enabled")
+	}
+}
+
+// displayServerInfo shows server configuration information
+func (s *Server) displayServerInfo() {
+	s.displayEndpoints()
+	s.displayAuthInfo()
+	s.displayRequestLimitInfo()
+	s.displayRateLimitInfo()
+}
+
+// displayEndpoints shows available API endpoints
+func (s *Server) displayEndpoints() {
 	fmt.Println("Available endpoints:")
 	fmt.Println("  GET  /health    - Health check")
 	fmt.Println("  GET  /stats     - Server statistics")
 	fmt.Println("  POST /tailor    - Tailor resume (requires API key)")
 	fmt.Println("  POST /evaluate  - Evaluate resume (requires API key)")
 	fmt.Println("  POST /analyze   - Analyze job description (requires API key)")
+}
 
+// displayAuthInfo shows authentication configuration
+func (s *Server) displayAuthInfo() {
 	if len(s.APIKeys) > 0 {
 		fmt.Printf("API authentication: ENABLED (%d keys configured)\n", len(s.APIKeys))
 		fmt.Println("Include 'X-API-Key: <your-key>' header in requests to /tailor and /evaluate")
@@ -296,16 +365,20 @@ func (s *Server) Start() error {
 		fmt.Println("API authentication: DISABLED (no API keys configured)")
 		fmt.Println("WARNING: API endpoints are publicly accessible!")
 	}
+}
 
-	// Display request size limit
+// displayRequestLimitInfo shows request size limit configuration
+func (s *Server) displayRequestLimitInfo() {
 	if s.MaxRequestSize > 0 {
 		fmt.Printf("Request size limit: %d bytes (%.1f MB)\n", s.MaxRequestSize, float64(s.MaxRequestSize)/(1024*1024))
 	} else {
 		fmt.Println("Request size limit: DISABLED")
 		fmt.Println("WARNING: No request size limits configured!")
 	}
+}
 
-	// Display rate limiting status
+// displayRateLimitInfo shows rate limiting configuration
+func (s *Server) displayRateLimitInfo() {
 	if s.RateLimit != nil && s.RateLimit.Enabled {
 		fmt.Printf("Rate limiting: ENABLED (%d requests/min, burst: %d)\n",
 			s.RateLimit.RequestsPerMin, s.RateLimit.BurstCapacity)
@@ -319,8 +392,6 @@ func (s *Server) Start() error {
 		fmt.Println("Rate limiting: DISABLED")
 		fmt.Println("WARNING: No rate limiting configured!")
 	}
-
-	return s.startWithGracefulShutdown(httpServer)
 }
 
 // startWithGracefulShutdown starts the HTTP server and handles graceful shutdown
@@ -470,42 +541,81 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 		MinVersion: tls.VersionTLS12, // Set minimum TLS version
 	}
 
-	// Use dynamic certificate loading if certificate manager is available
-	if s.CertificateManager != nil {
-		tlsConfig.GetCertificate = s.CertificateManager.GetServerCertificate
-
-		// Set up client certificate verification for mutual TLS
-		if s.TLSConfig.Mode == "mutual" {
-			tlsConfig.GetClientCertificate = func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-				return s.CertificateManager.GetClientCertificate()
-			}
-			tlsConfig.VerifyPeerCertificate = s.CertificateManager.VerifyPeerCertificate
-		}
-	} else {
-		// Fallback to static certificate loading for backward compatibility
-		var cert tls.Certificate
-		var err error
-
-		if s.TLSConfig.CertContent != "" && s.TLSConfig.KeyContent != "" {
-			// Load from certificate content (preferred for Vault)
-			cert, err = tls.X509KeyPair([]byte(s.TLSConfig.CertContent), []byte(s.TLSConfig.KeyContent))
-			if err != nil {
-				return nil, fmt.Errorf("failed to load server cert/key from content: %w", err)
-			}
-		} else if s.TLSConfig.CertFile != "" && s.TLSConfig.KeyFile != "" {
-			// Load from files (traditional approach)
-			cert, err = tls.LoadX509KeyPair(s.TLSConfig.CertFile, s.TLSConfig.KeyFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load server cert/key from files: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("TLS certificate and key are required (provide either files or content)")
-		}
-
-		tlsConfig.Certificates = []tls.Certificate{cert}
+	if err := s.configureTLSCertificates(tlsConfig); err != nil {
+		return nil, err
 	}
 
-	// Set minimum TLS version
+	s.configureTLSVersion(tlsConfig)
+	s.configureCipherSuites(tlsConfig)
+
+	if err := s.configureClientAuthentication(tlsConfig); err != nil {
+		return nil, err
+	}
+
+	s.configureDevelopmentOptions(tlsConfig)
+
+	return tlsConfig, nil
+}
+
+// configureTLSCertificates sets up certificate loading (dynamic or static)
+func (s *Server) configureTLSCertificates(tlsConfig *tls.Config) error {
+	if s.CertificateManager != nil {
+		return s.configureDynamicCertificates(tlsConfig)
+	}
+	return s.configureStaticCertificates(tlsConfig)
+}
+
+// configureDynamicCertificates sets up dynamic certificate loading via certificate manager
+func (s *Server) configureDynamicCertificates(tlsConfig *tls.Config) error {
+	tlsConfig.GetCertificate = s.CertificateManager.GetServerCertificate
+
+	// Set up client certificate verification for mutual TLS
+	if s.TLSConfig.Mode == "mutual" {
+		tlsConfig.GetClientCertificate = func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return s.CertificateManager.GetClientCertificate()
+		}
+		tlsConfig.VerifyPeerCertificate = s.CertificateManager.VerifyPeerCertificate
+	}
+
+	return nil
+}
+
+// configureStaticCertificates sets up static certificate loading for backward compatibility
+func (s *Server) configureStaticCertificates(tlsConfig *tls.Config) error {
+	cert, err := s.loadServerCertificate()
+	if err != nil {
+		return err
+	}
+
+	tlsConfig.Certificates = []tls.Certificate{cert}
+	return nil
+}
+
+// loadServerCertificate loads the server certificate from content or files
+func (s *Server) loadServerCertificate() (tls.Certificate, error) {
+	if s.TLSConfig.CertContent != "" && s.TLSConfig.KeyContent != "" {
+		// Load from certificate content (preferred for Vault)
+		cert, err := tls.X509KeyPair([]byte(s.TLSConfig.CertContent), []byte(s.TLSConfig.KeyContent))
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("failed to load server cert/key from content: %w", err)
+		}
+		return cert, nil
+	}
+
+	if s.TLSConfig.CertFile != "" && s.TLSConfig.KeyFile != "" {
+		// Load from files (traditional approach)
+		cert, err := tls.LoadX509KeyPair(s.TLSConfig.CertFile, s.TLSConfig.KeyFile)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("failed to load server cert/key from files: %w", err)
+		}
+		return cert, nil
+	}
+
+	return tls.Certificate{}, fmt.Errorf("TLS certificate and key are required (provide either files or content)")
+}
+
+// configureTLSVersion sets the minimum TLS version
+func (s *Server) configureTLSVersion(tlsConfig *tls.Config) {
 	switch s.TLSConfig.MinVersion {
 	case "1.2":
 		tlsConfig.MinVersion = tls.VersionTLS12
@@ -514,59 +624,92 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	default:
 		tlsConfig.MinVersion = tls.VersionTLS12 // Default to TLS 1.2
 	}
+}
 
-	// Configure cipher suites if specified
-	if len(s.TLSConfig.CipherSuites) > 0 {
-		cipherSuites := make([]uint16, 0, len(s.TLSConfig.CipherSuites))
-		for _, suite := range s.TLSConfig.CipherSuites {
-			if cipherID := getCipherSuiteID(suite); cipherID != 0 {
-				cipherSuites = append(cipherSuites, cipherID)
-			}
-		}
-		tlsConfig.CipherSuites = cipherSuites
+// configureCipherSuites configures the cipher suites if specified
+func (s *Server) configureCipherSuites(tlsConfig *tls.Config) {
+	if len(s.TLSConfig.CipherSuites) == 0 {
+		return
 	}
 
-	// Configure client authentication for mutual TLS
-	if s.TLSConfig.Mode == "mutual" {
-		caCertPool := x509.NewCertPool()
-		var caCert []byte
-
-		if s.TLSConfig.CAContent != "" {
-			// Load CA from content (preferred for Vault)
-			caCert = []byte(s.TLSConfig.CAContent)
-		} else if s.TLSConfig.CAFile != "" {
-			// Load CA from file (traditional approach)
-			var err error
-			caCert, err = os.ReadFile(s.TLSConfig.CAFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read CA file: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("CA certificate is required for mutual TLS mode (provide either caFile or caContent)")
+	cipherSuites := make([]uint16, 0, len(s.TLSConfig.CipherSuites))
+	for _, suite := range s.TLSConfig.CipherSuites {
+		if cipherID := getCipherSuiteID(suite); cipherID != 0 {
+			cipherSuites = append(cipherSuites, cipherID)
 		}
+	}
+	tlsConfig.CipherSuites = cipherSuites
+}
 
-		if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
-			return nil, fmt.Errorf("failed to append CA cert")
-		}
-		tlsConfig.ClientCAs = caCertPool
-
-		// Set client authentication policy
-		switch s.TLSConfig.ClientAuthPolicy {
-		case "require":
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		case "request":
-			tlsConfig.ClientAuth = tls.RequestClientCert
-		case "verify":
-			tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		default:
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert // Default for mutual TLS
-		}
-	} else {
+// configureClientAuthentication sets up client authentication for mutual TLS
+func (s *Server) configureClientAuthentication(tlsConfig *tls.Config) error {
+	if s.TLSConfig.Mode != "mutual" {
 		// For server-only TLS, no client authentication
 		tlsConfig.ClientAuth = tls.NoClientCert
+		return nil
 	}
 
-	// Development/testing options
+	caCertPool, err := s.loadCACertificatePool()
+	if err != nil {
+		return err
+	}
+
+	tlsConfig.ClientCAs = caCertPool
+	tlsConfig.ClientAuth = s.getClientAuthPolicy()
+
+	return nil
+}
+
+// loadCACertificatePool loads the CA certificate pool for client verification
+func (s *Server) loadCACertificatePool() (*x509.CertPool, error) {
+	caCertPool := x509.NewCertPool()
+	caCert, err := s.loadCACertificate()
+	if err != nil {
+		return nil, err
+	}
+
+	if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+		return nil, fmt.Errorf("failed to append CA cert")
+	}
+
+	return caCertPool, nil
+}
+
+// loadCACertificate loads the CA certificate from content or file
+func (s *Server) loadCACertificate() ([]byte, error) {
+	if s.TLSConfig.CAContent != "" {
+		// Load CA from content (preferred for Vault)
+		return []byte(s.TLSConfig.CAContent), nil
+	}
+
+	if s.TLSConfig.CAFile != "" {
+		// Load CA from file (traditional approach)
+		caCert, err := os.ReadFile(s.TLSConfig.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA file: %w", err)
+		}
+		return caCert, nil
+	}
+
+	return nil, fmt.Errorf("CA certificate is required for mutual TLS mode (provide either caFile or caContent)")
+}
+
+// getClientAuthPolicy returns the appropriate client authentication policy
+func (s *Server) getClientAuthPolicy() tls.ClientAuthType {
+	switch s.TLSConfig.ClientAuthPolicy {
+	case "require":
+		return tls.RequireAndVerifyClientCert
+	case "request":
+		return tls.RequestClientCert
+	case "verify":
+		return tls.VerifyClientCertIfGiven
+	default:
+		return tls.RequireAndVerifyClientCert // Default for mutual TLS
+	}
+}
+
+// configureDevelopmentOptions sets development/testing options
+func (s *Server) configureDevelopmentOptions(tlsConfig *tls.Config) {
 	if s.TLSConfig.InsecureSkipVerify {
 		tlsConfig.InsecureSkipVerify = true
 		fmt.Println("WARNING: TLS certificate verification is disabled (insecureSkipVerify=true)")
@@ -575,8 +718,6 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	if s.TLSConfig.ServerName != "" {
 		tlsConfig.ServerName = s.TLSConfig.ServerName
 	}
-
-	return tlsConfig, nil
 }
 
 // getCipherSuiteID returns the cipher suite ID for a given name

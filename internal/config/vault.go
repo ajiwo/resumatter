@@ -58,7 +58,34 @@ func NewVaultClient(config VaultConfig, logger *errors.Logger) (*VaultClient, er
 			"has_token", config.Token != "")
 	}
 
-	// Create Vault client configuration
+	client, err := createVaultAPIClient(config, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := resolveVaultToken(config, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	client.SetToken(token)
+	if logger != nil {
+		logger.Debug("Vault token configured", "token_prefix", token[:min(len(token), 8)]+"...")
+	}
+
+	if err := testVaultConnection(client, config.Address, logger); err != nil {
+		return nil, err
+	}
+
+	return &VaultClient{
+		client: client,
+		config: config,
+		logger: logger,
+	}, nil
+}
+
+// createVaultAPIClient creates and configures the Vault API client
+func createVaultAPIClient(config VaultConfig, logger *errors.Logger) (*api.Client, error) {
 	vaultConfig := api.DefaultConfig()
 	if config.Address != "" {
 		vaultConfig.Address = config.Address
@@ -80,8 +107,13 @@ func NewVaultClient(config VaultConfig, logger *errors.Logger) (*VaultClient, er
 		}
 	}
 
-	// Set token
+	return client, nil
+}
+
+// resolveVaultToken resolves the Vault token from config or file
+func resolveVaultToken(config VaultConfig, logger *errors.Logger) (string, error) {
 	token := config.Token
+
 	if token == "" && config.TokenFile != "" {
 		if logger != nil {
 			logger.Debug("Reading Vault token from file", "file", config.TokenFile)
@@ -91,7 +123,7 @@ func NewVaultClient(config VaultConfig, logger *errors.Logger) (*VaultClient, er
 			if logger != nil {
 				logger.LogError(err, "Failed to read Vault token file", "file", config.TokenFile)
 			}
-			return nil, fmt.Errorf("failed to read vault token file: %w", err)
+			return "", fmt.Errorf("failed to read vault token file: %w", err)
 		}
 		token = strings.TrimSpace(string(tokenBytes))
 	}
@@ -100,39 +132,35 @@ func NewVaultClient(config VaultConfig, logger *errors.Logger) (*VaultClient, er
 		if logger != nil {
 			logger.LogError(fmt.Errorf("vault token is required"), "Vault token is required when Vault is enabled")
 		}
-		return nil, fmt.Errorf("vault token is required when vault is enabled")
+		return "", fmt.Errorf("vault token is required when vault is enabled")
 	}
 
-	client.SetToken(token)
+	return token, nil
+}
+
+// testVaultConnection tests the connection to Vault
+func testVaultConnection(client *api.Client, address string, logger *errors.Logger) error {
 	if logger != nil {
-		logger.Debug("Vault token configured", "token_prefix", token[:min(len(token), 8)]+"...")
+		logger.Debug("Testing Vault connection", "address", address)
 	}
 
-	// Test connection
-	if logger != nil {
-		logger.Debug("Testing Vault connection", "address", vaultConfig.Address)
-	}
 	health, err := client.Sys().Health()
 	if err != nil {
 		if logger != nil {
-			logger.LogError(err, "Failed to connect to Vault", "address", vaultConfig.Address)
+			logger.LogError(err, "Failed to connect to Vault", "address", address)
 		}
-		return nil, fmt.Errorf("failed to connect to vault: %w", err)
+		return fmt.Errorf("failed to connect to vault: %w", err)
 	}
 
 	if logger != nil {
 		logger.Info("Successfully connected to Vault",
-			"address", vaultConfig.Address,
+			"address", address,
 			"version", health.Version,
 			"sealed", health.Sealed,
 			"cluster_name", health.ClusterName)
 	}
 
-	return &VaultClient{
-		client: client,
-		config: config,
-		logger: logger,
-	}, nil
+	return nil
 }
 
 // VaultSecret represents a secret read from Vault's KVv2 engine.
@@ -151,6 +179,29 @@ func (vc *VaultClient) GetSecretV2(path string) (*VaultSecret, error) {
 		vc.logger.Debug("Reading secret from Vault", "path", path)
 	}
 
+	secret, err := vc.readSecretFromVault(path)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := vc.extractSecretData(secret, path)
+	if err != nil {
+		return nil, err
+	}
+
+	version, err := vc.extractSecretVersion(secret, path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &VaultSecret{
+		Data:    data,
+		Version: version,
+	}, nil
+}
+
+// readSecretFromVault reads the raw secret from Vault
+func (vc *VaultClient) readSecretFromVault(path string) (*api.Secret, error) {
 	secret, err := vc.client.Logical().Read(path)
 	if err != nil {
 		if vc.logger != nil {
@@ -166,41 +217,49 @@ func (vc *VaultClient) GetSecretV2(path string) (*VaultSecret, error) {
 		return nil, fmt.Errorf("secret not found at path: %s", path)
 	}
 
+	return secret, nil
+}
+
+// extractSecretData extracts the data field from a KVv2 secret
+func (vc *VaultClient) extractSecretData(secret *api.Secret, path string) (map[string]any, error) {
 	data, ok := secret.Data["data"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("secret at %s is not in KVv2 format (missing 'data' field)", path)
 	}
+	return data, nil
+}
 
+// extractSecretVersion extracts and parses the version from a KVv2 secret
+func (vc *VaultClient) extractSecretVersion(secret *api.Secret, path string) (int64, error) {
 	metadata, ok := secret.Data["metadata"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("secret at %s is not in KVv2 format (missing 'metadata' field)", path)
+		return 0, fmt.Errorf("secret at %s is not in KVv2 format (missing 'metadata' field)", path)
 	}
 
 	versionRaw, ok := metadata["version"]
 	if !ok {
-		return nil, fmt.Errorf("secret metadata at %s is missing 'version' field", path)
+		return 0, fmt.Errorf("secret metadata at %s is missing 'version' field", path)
 	}
 
-	var version int64
+	return parseVersionValue(versionRaw, path)
+}
+
+// parseVersionValue parses version value from various types
+func parseVersionValue(versionRaw any, path string) (int64, error) {
 	switch v := versionRaw.(type) {
 	case int64:
-		version = v
+		return v, nil
 	case float64:
-		version = int64(v)
+		return int64(v), nil
 	case string:
-		var err error
-		version, err = parseInt64(v)
+		version, err := parseInt64(v)
 		if err != nil {
-			return nil, fmt.Errorf("could not parse secret version at %s: %w", path, err)
+			return 0, fmt.Errorf("could not parse secret version at %s: %w", path, err)
 		}
+		return version, nil
 	default:
-		return nil, fmt.Errorf("unexpected type for version at %s: %T", path, versionRaw)
+		return 0, fmt.Errorf("unexpected type for version at %s: %T", path, versionRaw)
 	}
-
-	return &VaultSecret{
-		Data:    data,
-		Version: version,
-	}, nil
 }
 
 func parseInt64(s string) (int64, error) {
@@ -258,14 +317,26 @@ func (vc *VaultClient) GetStringSliceSecret(path, key string) ([]string, error) 
 
 // ApplyVaultSecrets loads secrets from Vault and applies them to the config
 func ApplyVaultSecrets(config *Config, logger *errors.Logger) error {
-	vaultConfig := config.Vault
-	if !vaultConfig.Enabled {
+	if !config.Vault.Enabled {
 		if logger != nil {
 			logger.Debug("Vault integration disabled, skipping secret loading")
 		}
 		return nil // Vault not enabled, skip
 	}
 
+	client, err := initializeVaultClient(config.Vault, logger)
+	if err != nil {
+		return err
+	}
+	if client == nil {
+		return nil // Not an error, just disabled
+	}
+
+	return loadAllSecretsFromVault(client, config, logger)
+}
+
+// initializeVaultClient initializes the Vault client with proper logging
+func initializeVaultClient(vaultConfig VaultConfig, logger *errors.Logger) (*VaultClient, error) {
 	if logger != nil {
 		logger.Info("Loading secrets from Vault",
 			"api_keys_path", vaultConfig.Secrets.APIKeys,
@@ -278,137 +349,184 @@ func ApplyVaultSecrets(config *Config, logger *errors.Logger) error {
 		if logger != nil {
 			logger.LogError(err, "Failed to initialize Vault client")
 		}
-		return fmt.Errorf("failed to initialize vault client: %w", err)
-	}
-	if client == nil {
-		return nil // Not an error, just disabled
+		return nil, fmt.Errorf("failed to initialize vault client: %w", err)
 	}
 
-	// Load API keys if path is configured
-	if vaultConfig.Secrets.APIKeys != "" {
-		if logger != nil {
-			logger.Debug("Loading API keys from Vault", "path", vaultConfig.Secrets.APIKeys)
-		}
-		apiKeys, err := client.GetStringSliceSecret(vaultConfig.Secrets.APIKeys, "keys")
-		if err != nil {
-			if logger != nil {
-				logger.LogError(err, "Failed to load API keys from Vault", "path", vaultConfig.Secrets.APIKeys)
-			}
-			return fmt.Errorf("failed to load API keys from vault: %w", err)
-		}
-		if len(apiKeys) > 0 {
-			config.Server.APIKeys = apiKeys
-			if logger != nil {
-				logger.Info("API keys loaded from Vault", "count", len(apiKeys))
-			}
-		} else {
-			if logger != nil {
-				logger.Warn("No API keys found in Vault", "path", vaultConfig.Secrets.APIKeys)
-			}
-		}
+	return client, nil
+}
+
+// loadAllSecretsFromVault loads all configured secrets from Vault
+func loadAllSecretsFromVault(client *VaultClient, config *Config, logger *errors.Logger) error {
+	vaultConfig := config.Vault
+
+	// Load each type of secret
+	if err := loadAPIKeysFromVault(client, config, vaultConfig, logger); err != nil {
+		return err
 	}
 
-	// Load Gemini API key if path is configured
-	if vaultConfig.Secrets.GeminiKey != "" {
-		if logger != nil {
-			logger.Debug("Loading Gemini API key from Vault", "path", vaultConfig.Secrets.GeminiKey)
-		}
-		geminiKey, err := client.GetStringSecret(vaultConfig.Secrets.GeminiKey, "api_key")
-		if err != nil {
-			if logger != nil {
-				logger.LogError(err, "Failed to load Gemini API key from Vault", "path", vaultConfig.Secrets.GeminiKey)
-			}
-			return fmt.Errorf("failed to load Gemini API key from vault: %w", err)
-		}
-		if geminiKey != "" {
-			// Apply to global and operation-specific configs
-			config.AI.APIKey = geminiKey
-			if config.AI.Tailor.APIKey == "" {
-				config.AI.Tailor.APIKey = geminiKey
-			}
-			if config.AI.Evaluate.APIKey == "" {
-				config.AI.Evaluate.APIKey = geminiKey
-			}
-			if config.AI.Analyze.APIKey == "" {
-				config.AI.Analyze.APIKey = geminiKey
-			}
-			if logger != nil {
-				logger.Info("Gemini API key loaded from Vault and applied to all AI configurations")
-			}
-		} else {
-			if logger != nil {
-				logger.Warn("Empty Gemini API key found in Vault", "path", vaultConfig.Secrets.GeminiKey)
-			}
-		}
+	if err := loadGeminiKeyFromVault(client, config, vaultConfig, logger); err != nil {
+		return err
 	}
 
-	// Load TLS certificates if path is configured
-	if vaultConfig.Secrets.TLSCerts != "" {
-		if logger != nil {
-			logger.Debug("Loading TLS certificates from Vault", "path", vaultConfig.Secrets.TLSCerts)
-		}
-		tlsData, err := client.GetSecretV2(vaultConfig.Secrets.TLSCerts)
-		if err != nil {
-			if logger != nil {
-				logger.LogError(err, "Failed to load TLS certificates from Vault", "path", vaultConfig.Secrets.TLSCerts)
-			}
-			return fmt.Errorf("failed to load TLS certificates from vault: %w", err)
-		}
-
-		certCount := 0
-
-		// Load certificate content from Vault (only secure approach supported)
-		if certContent, ok := tlsData.Data["cert"].(string); ok && certContent != "" {
-			config.Server.TLS.CertContent = certContent
-			certCount++
-			if logger != nil {
-				logger.Debug("TLS certificate content loaded from Vault", "content_length", len(certContent))
-			}
-		}
-
-		if keyContent, ok := tlsData.Data["key"].(string); ok && keyContent != "" {
-			config.Server.TLS.KeyContent = keyContent
-			certCount++
-			if logger != nil {
-				logger.Debug("TLS private key content loaded from Vault", "content_length", len(keyContent))
-			}
-		}
-
-		if caContent, ok := tlsData.Data["ca"].(string); ok && caContent != "" {
-			config.Server.TLS.CAContent = caContent
-			certCount++
-			if logger != nil {
-				logger.Debug("TLS CA certificate content loaded from Vault", "content_length", len(caContent))
-			}
-		}
-
-		// Check for deprecated file path fields and provide clear error
-		if _, hasOldCert := tlsData.Data["cert_file"]; hasOldCert {
-			if logger != nil {
-				logger.LogError(fmt.Errorf("deprecated field detected"), "cert_file field is no longer supported in Vault. Use 'cert' field with certificate content instead.")
-			}
-			return fmt.Errorf("vault TLS configuration error: 'cert_file' field is no longer supported. Store certificate content in 'cert' field instead")
-		}
-		if _, hasOldKey := tlsData.Data["key_file"]; hasOldKey {
-			if logger != nil {
-				logger.LogError(fmt.Errorf("deprecated field detected"), "key_file field is no longer supported in Vault. Use 'key' field with private key content instead.")
-			}
-			return fmt.Errorf("vault TLS configuration error: 'key_file' field is no longer supported. Store private key content in 'key' field instead")
-		}
-		if _, hasOldCA := tlsData.Data["ca_file"]; hasOldCA {
-			if logger != nil {
-				logger.LogError(fmt.Errorf("deprecated field detected"), "ca_file field is no longer supported in Vault. Use 'ca' field with CA certificate content instead.")
-			}
-			return fmt.Errorf("vault TLS configuration error: 'ca_file' field is no longer supported. Store CA certificate content in 'ca' field instead")
-		}
-
-		if logger != nil {
-			logger.Info("TLS certificates loaded from Vault", "certificates_loaded", certCount)
-		}
+	if err := loadTLSCertsFromVault(client, config, vaultConfig, logger); err != nil {
+		return err
 	}
 
 	if logger != nil {
 		logger.Info("Successfully completed applying secrets from Vault")
+	}
+
+	return nil
+}
+
+// loadAPIKeysFromVault loads API keys from Vault
+func loadAPIKeysFromVault(client *VaultClient, config *Config, vaultConfig VaultConfig, logger *errors.Logger) error {
+	if vaultConfig.Secrets.APIKeys == "" {
+		return nil
+	}
+
+	if logger != nil {
+		logger.Debug("Loading API keys from Vault", "path", vaultConfig.Secrets.APIKeys)
+	}
+
+	apiKeys, err := client.GetStringSliceSecret(vaultConfig.Secrets.APIKeys, "keys")
+	if err != nil {
+		if logger != nil {
+			logger.LogError(err, "Failed to load API keys from Vault", "path", vaultConfig.Secrets.APIKeys)
+		}
+		return fmt.Errorf("failed to load API keys from vault: %w", err)
+	}
+
+	if len(apiKeys) > 0 {
+		config.Server.APIKeys = apiKeys
+		if logger != nil {
+			logger.Info("API keys loaded from Vault", "count", len(apiKeys))
+		}
+	} else {
+		if logger != nil {
+			logger.Warn("No API keys found in Vault", "path", vaultConfig.Secrets.APIKeys)
+		}
+	}
+
+	return nil
+}
+
+// loadGeminiKeyFromVault loads Gemini API key from Vault
+func loadGeminiKeyFromVault(client *VaultClient, config *Config, vaultConfig VaultConfig, logger *errors.Logger) error {
+	if vaultConfig.Secrets.GeminiKey == "" {
+		return nil
+	}
+
+	if logger != nil {
+		logger.Debug("Loading Gemini API key from Vault", "path", vaultConfig.Secrets.GeminiKey)
+	}
+
+	geminiKey, err := client.GetStringSecret(vaultConfig.Secrets.GeminiKey, "api_key")
+	if err != nil {
+		if logger != nil {
+			logger.LogError(err, "Failed to load Gemini API key from Vault", "path", vaultConfig.Secrets.GeminiKey)
+		}
+		return fmt.Errorf("failed to load Gemini API key from vault: %w", err)
+	}
+
+	if geminiKey != "" {
+		applyGeminiKeyToConfig(config, geminiKey)
+		if logger != nil {
+			logger.Info("Gemini API key loaded from Vault and applied to all AI configurations")
+		}
+	} else {
+		if logger != nil {
+			logger.Warn("Empty Gemini API key found in Vault", "path", vaultConfig.Secrets.GeminiKey)
+		}
+	}
+
+	return nil
+}
+
+// applyGeminiKeyToConfig applies the Gemini API key to all AI configurations
+func applyGeminiKeyToConfig(config *Config, geminiKey string) {
+	config.AI.APIKey = geminiKey
+	if config.AI.Tailor.APIKey == "" {
+		config.AI.Tailor.APIKey = geminiKey
+	}
+	if config.AI.Evaluate.APIKey == "" {
+		config.AI.Evaluate.APIKey = geminiKey
+	}
+	if config.AI.Analyze.APIKey == "" {
+		config.AI.Analyze.APIKey = geminiKey
+	}
+}
+
+// loadTLSCertsFromVault loads TLS certificates from Vault
+func loadTLSCertsFromVault(client *VaultClient, config *Config, vaultConfig VaultConfig, logger *errors.Logger) error {
+	if vaultConfig.Secrets.TLSCerts == "" {
+		return nil
+	}
+
+	if logger != nil {
+		logger.Debug("Loading TLS certificates from Vault", "path", vaultConfig.Secrets.TLSCerts)
+	}
+
+	tlsData, err := client.GetSecretV2(vaultConfig.Secrets.TLSCerts)
+	if err != nil {
+		if logger != nil {
+			logger.LogError(err, "Failed to load TLS certificates from Vault", "path", vaultConfig.Secrets.TLSCerts)
+		}
+		return fmt.Errorf("failed to load TLS certificates from vault: %w", err)
+	}
+
+	certCount := loadTLSCertificateContent(config, tlsData, logger)
+
+	if err := validateTLSDeprecatedFields(tlsData, logger); err != nil {
+		return err
+	}
+
+	if logger != nil {
+		logger.Info("TLS certificates loaded from Vault", "certificates_loaded", certCount)
+	}
+
+	return nil
+}
+
+// loadTLSCertificateContent loads certificate content from Vault data
+func loadTLSCertificateContent(config *Config, tlsData *VaultSecret, logger *errors.Logger) int {
+	certCount := 0
+
+	certCount += loadSingleCertificate(tlsData, "cert", &config.Server.TLS.CertContent, "TLS certificate content", logger)
+	certCount += loadSingleCertificate(tlsData, "key", &config.Server.TLS.KeyContent, "TLS private key content", logger)
+	certCount += loadSingleCertificate(tlsData, "ca", &config.Server.TLS.CAContent, "TLS CA certificate content", logger)
+
+	return certCount
+}
+
+// loadSingleCertificate loads a single certificate field from Vault data
+func loadSingleCertificate(tlsData *VaultSecret, key string, target *string, description string, logger *errors.Logger) int {
+	if content, ok := tlsData.Data[key].(string); ok && content != "" {
+		*target = content
+		if logger != nil {
+			logger.Debug(description+" loaded from Vault", "content_length", len(content))
+		}
+		return 1
+	}
+	return 0
+}
+
+// validateTLSDeprecatedFields checks for deprecated TLS field usage
+func validateTLSDeprecatedFields(tlsData *VaultSecret, logger *errors.Logger) error {
+	deprecatedFields := map[string]string{
+		"cert_file": "cert_file field is no longer supported in Vault. Use 'cert' field with certificate content instead.",
+		"key_file":  "key_file field is no longer supported in Vault. Use 'key' field with private key content instead.",
+		"ca_file":   "ca_file field is no longer supported in Vault. Use 'ca' field with CA certificate content instead.",
+	}
+
+	for field, message := range deprecatedFields {
+		if _, hasField := tlsData.Data[field]; hasField {
+			if logger != nil {
+				logger.LogError(fmt.Errorf("deprecated field detected"), message)
+			}
+			return fmt.Errorf("vault TLS configuration error: '%s' field is no longer supported. Store certificate content in '%s' field instead",
+				field, strings.TrimSuffix(field, "_file"))
+		}
 	}
 
 	return nil

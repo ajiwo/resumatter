@@ -748,11 +748,6 @@ func (c *Config) applyFallbacks() {
 			c.Observability.ServiceInstance = fmt.Sprintf("%s-1", c.Observability.ServiceName)
 		}
 	}
-
-	// Set console output based on log level if not explicitly configured
-	if c.App.LogLevel == "debug" && !c.Observability.ConsoleOutput {
-		c.Observability.ConsoleOutput = true
-	}
 }
 
 // logConfigurationSources logs a summary of configuration sources being used

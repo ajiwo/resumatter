@@ -592,7 +592,7 @@ func (om *ObservabilityManager) createOTLPExporter() (trace.SpanExporter, error)
 
 	// Prepare OTLP options
 	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpoint(otlpConfig.Endpoint),
+		otlptracehttp.WithEndpointURL(otlpConfig.Endpoint),
 	}
 
 	// Configure TLS
@@ -624,7 +624,7 @@ func (om *ObservabilityManager) createOTLPMetricsReader() (sdkmetric.Reader, err
 
 	// Prepare OTLP options
 	opts := []otlpmetrichttp.Option{
-		otlpmetrichttp.WithEndpoint(otlpConfig.Endpoint),
+		otlpmetrichttp.WithEndpointURL(otlpConfig.Endpoint),
 	}
 
 	// Configure TLS

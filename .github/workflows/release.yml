@@ -1,0 +1,215 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-binaries:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Get version info
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        if [[ "$VERSION" == "refs/heads/"* ]]; then
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        fi
+        GIT_COMMIT=$(git rev-parse HEAD)
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "git_commit=$GIT_COMMIT" >> $GITHUB_OUTPUT
+        echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        BINARY_NAME="resumatter"
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          BINARY_NAME="resumatter.exe"
+        fi
+        
+        LDFLAGS="-s -w -X resumatter/internal/cli.Version=${{ steps.version.outputs.version }} \
+                 -X resumatter/internal/cli.GitCommit=${{ steps.version.outputs.git_commit }} \
+                 -X resumatter/internal/cli.BuildDate=${{ steps.version.outputs.build_date }}"
+        
+        go build -ldflags "$LDFLAGS" -o "build/${BINARY_NAME}" ./cmd/resumatter
+        
+        # Create archive
+        cd build
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          zip "../resumatter-${{ matrix.goos }}-${{ matrix.goarch }}.zip" "${BINARY_NAME}"
+        else
+          tar -czf "../resumatter-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" "${BINARY_NAME}"
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: resumatter-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          resumatter-${{ matrix.goos }}-${{ matrix.goarch }}.*
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Get version info
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        if [[ "$VERSION" == "refs/heads/"* ]]; then
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        fi
+        GIT_COMMIT=$(git rev-parse HEAD)
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "git_commit=$GIT_COMMIT" >> $GITHUB_OUTPUT
+        echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          VERSION=${{ steps.version.outputs.version }}
+          GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          BUILD_DATE=${{ steps.version.outputs.build_date }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-docker]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} release-assets/
+        ls -la release-assets/
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/}
+        echo "## What's Changed in $VERSION" > release_notes.md
+        echo "" >> release_notes.md
+        echo "### Downloads" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Binaries" >> release_notes.md
+        echo "- **Linux AMD64**: \`resumatter-linux-amd64.tar.gz\`" >> release_notes.md
+        echo "- **Linux ARM64**: \`resumatter-linux-arm64.tar.gz\`" >> release_notes.md
+        echo "- **macOS AMD64**: \`resumatter-darwin-amd64.tar.gz\`" >> release_notes.md
+        echo "- **macOS ARM64**: \`resumatter-darwin-arm64.tar.gz\`" >> release_notes.md
+        echo "- **Windows AMD64**: \`resumatter-windows-amd64.zip\`" >> release_notes.md
+        echo "- **Windows ARM64**: \`resumatter-windows-arm64.zip\`" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Docker Images" >> release_notes.md
+        echo "\`\`\`bash" >> release_notes.md
+        echo "docker pull ghcr.io/${{ github.repository }}:$VERSION" >> release_notes.md
+        echo "docker pull ghcr.io/${{ github.repository }}:latest" >> release_notes.md
+        echo "\`\`\`" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Installation" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Quick Install (Linux/macOS)" >> release_notes.md
+        echo "\`\`\`bash" >> release_notes.md
+        echo "curl -L https://github.com/${{ github.repository }}/releases/download/$VERSION/resumatter-\$(uname -s | tr '[:upper:]' '[:lower:]')-\$(uname -m | sed 's/x86_64/amd64/').tar.gz | tar -xz" >> release_notes.md
+        echo "chmod +x resumatter" >> release_notes.md
+        echo "sudo mv resumatter /usr/local/bin/" >> release_notes.md
+        echo "\`\`\`" >> release_notes.md
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-assets/*
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

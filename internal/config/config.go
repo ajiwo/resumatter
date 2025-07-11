@@ -655,70 +655,127 @@ func (c *Config) GetLoadedGlobalPrompts() LoadedPrompts {
 func (c *Config) ValidateTLSConfig() error {
 	tls := c.Server.TLS
 
-	switch tls.Mode {
-	case "disabled":
-		// No validation needed for disabled mode
-		return nil
-	case "server":
-		// Check if we have either files or content for cert and key
-		if (tls.CertFile == "" && tls.CertContent == "") || (tls.KeyFile == "" && tls.KeyContent == "") {
-			return fmt.Errorf("TLS certificate and key are required for server mode (provide either files or content)")
-		}
-		// Ensure we don't have both file and content for the same certificate
-		if tls.CertFile != "" && tls.CertContent != "" {
-			return fmt.Errorf("cannot specify both certFile and certContent - choose one")
-		}
-		if tls.KeyFile != "" && tls.KeyContent != "" {
-			return fmt.Errorf("cannot specify both keyFile and keyContent - choose one")
-		}
-	case "mutual":
-		// Check if we have either files or content for cert and key
-		if (tls.CertFile == "" && tls.CertContent == "") || (tls.KeyFile == "" && tls.KeyContent == "") {
-			return fmt.Errorf("TLS certificate and key are required for mutual mode (provide either files or content)")
-		}
-		// Check if we have either file or content for CA
-		if tls.CAFile == "" && tls.CAContent == "" {
-			return fmt.Errorf("CA certificate is required for mutual TLS mode (provide either caFile or caContent)")
-		}
-		// Ensure we don't have both file and content for the same certificate
-		if tls.CertFile != "" && tls.CertContent != "" {
-			return fmt.Errorf("cannot specify both certFile and certContent - choose one")
-		}
-		if tls.KeyFile != "" && tls.KeyContent != "" {
-			return fmt.Errorf("cannot specify both keyFile and keyContent - choose one")
-		}
-		if tls.CAFile != "" && tls.CAContent != "" {
-			return fmt.Errorf("cannot specify both caFile and caContent - choose one")
-		}
-		// Validate client auth policy
-		switch tls.ClientAuthPolicy {
-		case "require", "request", "verify":
-			// Valid policies
-		case "":
-			// Default to require for mutual mode
-		default:
-			return fmt.Errorf("invalid clientAuthPolicy: %s (must be 'require', 'request', or 'verify')", tls.ClientAuthPolicy)
-		}
-	default:
-		return fmt.Errorf("invalid TLS mode: %s (must be 'disabled', 'server', or 'mutual')", tls.Mode)
+	if err := validateTLSMode(tls); err != nil {
+		return err
 	}
 
-	// Validate TLS version
-	switch tls.MinVersion {
-	case "", "1.2", "1.3":
-		// Valid versions (empty defaults to 1.2)
-	default:
-		return fmt.Errorf("invalid TLS minVersion: %s (must be '1.2' or '1.3')", tls.MinVersion)
+	if err := validateTLSVersion(tls); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// validateTLSMode validates the TLS mode and associated requirements
+func validateTLSMode(tls TLSConfig) error {
+	switch tls.Mode {
+	case "disabled":
+		return nil // No validation needed for disabled mode
+	case "server":
+		return validateServerModeTLS(tls)
+	case "mutual":
+		return validateMutualModeTLS(tls)
+	default:
+		return fmt.Errorf("invalid TLS mode: %s (must be 'disabled', 'server', or 'mutual')", tls.Mode)
+	}
+}
+
+// validateServerModeTLS validates TLS configuration for server mode
+func validateServerModeTLS(tls TLSConfig) error {
+	if err := validateCertAndKeyRequired(tls, "server mode"); err != nil {
+		return err
+	}
+
+	return validateNoDuplicateCertSources(tls)
+}
+
+// validateMutualModeTLS validates TLS configuration for mutual mode
+func validateMutualModeTLS(tls TLSConfig) error {
+	if err := validateCertAndKeyRequired(tls, "mutual mode"); err != nil {
+		return err
+	}
+
+	if err := validateCARequired(tls); err != nil {
+		return err
+	}
+
+	if err := validateNoDuplicateCertSources(tls); err != nil {
+		return err
+	}
+
+	if err := validateCANoDuplicateSource(tls); err != nil {
+		return err
+	}
+
+	return validateClientAuthPolicy(tls)
+}
+
+// validateCertAndKeyRequired checks that both certificate and key are provided
+func validateCertAndKeyRequired(tls TLSConfig, mode string) error {
+	if (tls.CertFile == "" && tls.CertContent == "") || (tls.KeyFile == "" && tls.KeyContent == "") {
+		return fmt.Errorf("TLS certificate and key are required for %s (provide either files or content)", mode)
+	}
+	return nil
+}
+
+// validateCARequired checks that CA certificate is provided for mutual TLS
+func validateCARequired(tls TLSConfig) error {
+	if tls.CAFile == "" && tls.CAContent == "" {
+		return fmt.Errorf("CA certificate is required for mutual TLS mode (provide either caFile or caContent)")
+	}
+	return nil
+}
+
+// validateNoDuplicateCertSources ensures no duplicate sources for cert and key
+func validateNoDuplicateCertSources(tls TLSConfig) error {
+	if tls.CertFile != "" && tls.CertContent != "" {
+		return fmt.Errorf("cannot specify both certFile and certContent - choose one")
+	}
+	if tls.KeyFile != "" && tls.KeyContent != "" {
+		return fmt.Errorf("cannot specify both keyFile and keyContent - choose one")
+	}
+	return nil
+}
+
+// validateCANoDuplicateSource ensures no duplicate sources for CA
+func validateCANoDuplicateSource(tls TLSConfig) error {
+	if tls.CAFile != "" && tls.CAContent != "" {
+		return fmt.Errorf("cannot specify both caFile and caContent - choose one")
+	}
+	return nil
+}
+
+// validateClientAuthPolicy validates the client authentication policy
+func validateClientAuthPolicy(tls TLSConfig) error {
+	switch tls.ClientAuthPolicy {
+	case "require", "request", "verify", "":
+		return nil // Valid policies (empty defaults to require)
+	default:
+		return fmt.Errorf("invalid clientAuthPolicy: %s (must be 'require', 'request', or 'verify')", tls.ClientAuthPolicy)
+	}
+}
+
+// validateTLSVersion validates the TLS version configuration
+func validateTLSVersion(tls TLSConfig) error {
+	switch tls.MinVersion {
+	case "", "1.2", "1.3":
+		return nil // Valid versions (empty defaults to 1.2)
+	default:
+		return fmt.Errorf("invalid TLS minVersion: %s (must be '1.2' or '1.3')", tls.MinVersion)
+	}
 }
 
 // applyFallbacks applies environment variable fallbacks
 func (c *Config) applyFallbacks() {
 	// Note: API key fallbacks are now handled in Get...Config() methods to avoid duplication
 
-	// Parse API keys from environment variable if not set in config
+	c.applyServerAPIKeyFallbacks()
+	c.applyTLSDefaults()
+	c.applyObservabilityDefaults()
+}
+
+// applyServerAPIKeyFallbacks applies API key fallbacks from environment variables
+func (c *Config) applyServerAPIKeyFallbacks() {
 	if len(c.Server.APIKeys) == 0 {
 		if apiKeysEnv := os.Getenv("RESUMATTER_SERVER_APIKEYS"); apiKeysEnv != "" {
 			c.Server.APIKeys = strings.Split(apiKeysEnv, ",")
@@ -728,7 +785,10 @@ func (c *Config) applyFallbacks() {
 			}
 		}
 	}
+}
 
+// applyTLSDefaults applies default TLS configuration values
+func (c *Config) applyTLSDefaults() {
 	// Set default client auth policy for mutual TLS if not specified
 	if c.Server.TLS.Mode == "mutual" && c.Server.TLS.ClientAuthPolicy == "" {
 		c.Server.TLS.ClientAuthPolicy = "require"
@@ -738,16 +798,22 @@ func (c *Config) applyFallbacks() {
 	if c.Server.TLS.MinVersion == "" && c.Server.TLS.Mode != "disabled" {
 		c.Server.TLS.MinVersion = "1.2"
 	}
+}
 
-	// Set dynamic service instance ID if not specified
+// applyObservabilityDefaults applies default observability configuration values
+func (c *Config) applyObservabilityDefaults() {
 	if c.Observability.ServiceInstance == "" {
-		// Try to get hostname, fallback to default
-		if hostname, err := os.Hostname(); err == nil {
-			c.Observability.ServiceInstance = fmt.Sprintf("%s-%s", c.Observability.ServiceName, hostname)
-		} else {
-			c.Observability.ServiceInstance = fmt.Sprintf("%s-1", c.Observability.ServiceName)
-		}
+		c.Observability.ServiceInstance = generateServiceInstanceID(c.Observability.ServiceName)
 	}
+}
+
+// generateServiceInstanceID generates a unique service instance ID
+func generateServiceInstanceID(serviceName string) string {
+	// Try to get hostname, fallback to default
+	if hostname, err := os.Hostname(); err == nil {
+		return fmt.Sprintf("%s-%s", serviceName, hostname)
+	}
+	return fmt.Sprintf("%s-1", serviceName)
 }
 
 // logConfigurationSources logs a summary of configuration sources being used

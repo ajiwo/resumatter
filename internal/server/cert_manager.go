@@ -90,86 +90,146 @@ func (cm *CertificateManager) Start() error {
 	// Start certificate expiry monitoring
 	cm.StartExpiryMonitoring()
 
-	// Start file watcher if enabled and using file-based certificates
-	if cm.autoReloadConfig != nil && cm.autoReloadConfig.FileWatcher.Enabled &&
-		(cm.config.CertFile != "" || cm.config.KeyFile != "" || cm.config.CAFile != "") {
-		watcher, err := NewCertWatcher(
-			cm.config.CertFile,
-			cm.config.KeyFile,
-			cm.config.CAFile,
-			cm.autoReloadConfig.FileWatcher.DebounceDelay,
-			cm.triggerReload,
-			cm.logger,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to create file watcher: %w", err)
-		}
-		cm.fileWatcher = watcher
-		if err := cm.fileWatcher.Start(); err != nil {
-			return fmt.Errorf("failed to start file watcher: %w", err)
-		}
-		if cm.logger != nil {
-			cm.logger.Info("Certificate file watcher started",
-				"cert_file", cm.config.CertFile,
-				"key_file", cm.config.KeyFile,
-				"ca_file", cm.config.CAFile)
-		}
+	// Start file watcher if enabled
+	if err := cm.startFileWatcher(); err != nil {
+		return err
 	}
 
-	// Start Vault watcher if enabled and using Vault-based certificates
-	if cm.autoReloadConfig != nil && cm.autoReloadConfig.VaultWatcher.Enabled &&
-		(cm.config.CertContent != "" || cm.config.KeyContent != "" || cm.config.CAContent != "") {
-		if cm.vaultClient == nil {
-			if cm.logger != nil {
-				cm.logger.Warn("Vault watcher enabled but Vault client is nil")
-			}
-		} else {
-			// Create a callback that handles the new certificate data from Vault
-			vaultReloadCb := func(data *CertificateData, err error) {
-				if err != nil {
-					if cm.logger != nil {
-						cm.logger.LogError(err, "Failed to fetch new certificate data from Vault")
-					}
-					return
-				}
-
-				// Update the certificate manager's configuration with new data
-				cm.mu.Lock()
-				if data.CertContent != "" {
-					cm.config.CertContent = data.CertContent
-				}
-				if data.KeyContent != "" {
-					cm.config.KeyContent = data.KeyContent
-				}
-				if data.CAContent != "" {
-					cm.config.CAContent = data.CAContent
-				}
-				cm.mu.Unlock()
-
-				// Now trigger the internal reload logic
-				cm.triggerReload()
-			}
-
-			vw := NewVaultWatcher(
-				cm.vaultClient,
-				cm.autoReloadConfig.VaultWatcher.SecretPath,
-				cm.autoReloadConfig.VaultWatcher.PollInterval,
-				vaultReloadCb,
-				cm.logger,
-			)
-			cm.vaultWatcher = vw
-			if err := cm.vaultWatcher.Start(); err != nil {
-				return fmt.Errorf("failed to start Vault watcher: %w", err)
-			}
-			if cm.logger != nil {
-				cm.logger.Info("Vault watcher started",
-					"secret_path", cm.autoReloadConfig.VaultWatcher.SecretPath,
-					"poll_interval", cm.autoReloadConfig.VaultWatcher.PollInterval)
-			}
-		}
+	// Start Vault watcher if enabled
+	if err := cm.startVaultWatcher(); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// startFileWatcher starts the file watcher if enabled and using file-based certificates
+func (cm *CertificateManager) startFileWatcher() error {
+	if cm.autoReloadConfig == nil || !cm.autoReloadConfig.FileWatcher.Enabled {
+		return nil
+	}
+
+	if cm.config.CertFile == "" && cm.config.KeyFile == "" && cm.config.CAFile == "" {
+		return nil
+	}
+
+	watcher, err := NewCertWatcher(
+		cm.config.CertFile,
+		cm.config.KeyFile,
+		cm.config.CAFile,
+		cm.autoReloadConfig.FileWatcher.DebounceDelay,
+		cm.triggerReload,
+		cm.logger,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create file watcher: %w", err)
+	}
+
+	cm.fileWatcher = watcher
+	if err := cm.fileWatcher.Start(); err != nil {
+		return fmt.Errorf("failed to start file watcher: %w", err)
+	}
+
+	if cm.logger != nil {
+		cm.logger.Info("Certificate file watcher started",
+			"cert_file", cm.config.CertFile,
+			"key_file", cm.config.KeyFile,
+			"ca_file", cm.config.CAFile)
+	}
+
+	return nil
+}
+
+// startVaultWatcher starts the Vault watcher if enabled and using Vault-based certificates
+func (cm *CertificateManager) startVaultWatcher() error {
+	if !cm.shouldStartVaultWatcher() {
+		return nil
+	}
+
+	if !cm.isVaultClientAvailable() {
+		return nil
+	}
+
+	vw, err := cm.createVaultWatcher()
+	if err != nil {
+		return err
+	}
+
+	return cm.startVaultWatcherInstance(vw)
+}
+
+// shouldStartVaultWatcher checks if Vault watcher should be started
+func (cm *CertificateManager) shouldStartVaultWatcher() bool {
+	return cm.autoReloadConfig != nil && cm.autoReloadConfig.VaultWatcher.Enabled &&
+		(cm.config.CertContent != "" || cm.config.KeyContent != "" || cm.config.CAContent != "")
+}
+
+// isVaultClientAvailable checks if Vault client is available
+func (cm *CertificateManager) isVaultClientAvailable() bool {
+	if cm.vaultClient == nil {
+		if cm.logger != nil {
+			cm.logger.Warn("Vault watcher enabled but Vault client is nil")
+		}
+		return false
+	}
+	return true
+}
+
+// createVaultWatcher creates a new Vault watcher instance
+func (cm *CertificateManager) createVaultWatcher() (*VaultWatcher, error) {
+	vaultReloadCb := cm.createVaultReloadCallback()
+	vw := NewVaultWatcher(
+		cm.vaultClient,
+		cm.autoReloadConfig.VaultWatcher.SecretPath,
+		cm.autoReloadConfig.VaultWatcher.PollInterval,
+		vaultReloadCb,
+		cm.logger,
+	)
+	return vw, nil
+}
+
+// startVaultWatcherInstance starts the Vault watcher instance
+func (cm *CertificateManager) startVaultWatcherInstance(vw *VaultWatcher) error {
+	cm.vaultWatcher = vw
+	if err := cm.vaultWatcher.Start(); err != nil {
+		return fmt.Errorf("failed to start Vault watcher: %w", err)
+	}
+
+	if cm.logger != nil {
+		cm.logger.Info("Vault watcher started",
+			"secret_path", cm.autoReloadConfig.VaultWatcher.SecretPath,
+			"poll_interval", cm.autoReloadConfig.VaultWatcher.PollInterval)
+	}
+
+	return nil
+}
+
+// createVaultReloadCallback creates a callback that handles new certificate data from Vault
+func (cm *CertificateManager) createVaultReloadCallback() func(*CertificateData, error) {
+	return func(data *CertificateData, err error) {
+		if err != nil {
+			if cm.logger != nil {
+				cm.logger.LogError(err, "Failed to fetch new certificate data from Vault")
+			}
+			return
+		}
+
+		// Update the certificate manager's configuration with new data
+		cm.mu.Lock()
+		if data.CertContent != "" {
+			cm.config.CertContent = data.CertContent
+		}
+		if data.KeyContent != "" {
+			cm.config.KeyContent = data.KeyContent
+		}
+		if data.CAContent != "" {
+			cm.config.CAContent = data.CAContent
+		}
+		cm.mu.Unlock()
+
+		// Now trigger the internal reload logic
+		cm.triggerReload()
+	}
 }
 
 // Stop stops the certificate manager and all watchers
@@ -341,59 +401,13 @@ func (cm *CertificateManager) loadCertificates() error {
 	var newCACertPool *x509.CertPool
 
 	// Load server certificate and key
-	if (cm.config.CertFile != "" && cm.config.KeyFile != "") ||
-		(cm.config.CertContent != "" && cm.config.KeyContent != "") {
-
-		var cert tls.Certificate
-		var err error
-
-		if cm.config.CertContent != "" && cm.config.KeyContent != "" {
-			// Load from content (Vault)
-			cert, err = tls.X509KeyPair([]byte(cm.config.CertContent), []byte(cm.config.KeyContent))
-		} else {
-			// Load from files
-			cert, err = tls.LoadX509KeyPair(cm.config.CertFile, cm.config.KeyFile)
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to load server certificate: %w", err)
-		}
-
-		// Parse certificate to get expiry time
-		if len(cert.Certificate) > 0 {
-			x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
-			if err != nil {
-				return fmt.Errorf("failed to parse server certificate: %w", err)
-			}
-			cm.serverCertExpiry = x509Cert.NotAfter
-		}
-
-		newServerCert = &cert
+	if err := cm.loadServerCertificate(&newServerCert); err != nil {
+		return err
 	}
 
 	// Load CA certificate for mutual TLS
-	if cm.config.Mode == "mutual" {
-		caCertPool := x509.NewCertPool()
-		var caCert []byte
-		var err error
-
-		if cm.config.CAContent != "" {
-			// Load from content (Vault)
-			caCert = []byte(cm.config.CAContent)
-		} else if cm.config.CAFile != "" {
-			// Load from file
-			caCert, err = os.ReadFile(cm.config.CAFile)
-			if err != nil {
-				return fmt.Errorf("failed to read CA file: %w", err)
-			}
-		}
-
-		if len(caCert) > 0 {
-			if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
-				return fmt.Errorf("failed to parse CA certificate")
-			}
-			newCACertPool = caCertPool
-		}
+	if err := cm.loadCACertificate(&newCACertPool); err != nil {
+		return err
 	}
 
 	// Update certificates atomically
@@ -402,19 +416,9 @@ func (cm *CertificateManager) loadCertificates() error {
 	cm.caCertPool = newCACertPool
 	cm.lastReloadTime = time.Now()
 
-	// Update internal metrics
-	cm.reloadCount++
-	cm.reloadSuccessCount++
-	cm.lastReloadSuccess = true
-	cm.lastReloadError = ""
-
-	// Record OpenTelemetry metrics
-	cm.recordMetrics(true, nil)
-
-	// Call reload callbacks
-	for _, callback := range cm.reloadCallbacks {
-		go callback(true, nil)
-	}
+	// Update metrics and callbacks
+	cm.updateReloadMetrics(true, nil)
+	cm.callReloadCallbacks(true, nil)
 
 	if cm.logger != nil {
 		cm.logger.Info("Certificates reloaded successfully",
@@ -425,6 +429,112 @@ func (cm *CertificateManager) loadCertificates() error {
 	return nil
 }
 
+// loadServerCertificate loads the server certificate and key
+func (cm *CertificateManager) loadServerCertificate(newServerCert **tls.Certificate) error {
+	if !cm.shouldLoadServerCertificate() {
+		return nil
+	}
+
+	cert, err := cm.loadCertificatePair()
+	if err != nil {
+		return err
+	}
+
+	if err := cm.parseCertificateExpiry(&cert); err != nil {
+		return err
+	}
+
+	*newServerCert = &cert
+	return nil
+}
+
+// shouldLoadServerCertificate checks if server certificate should be loaded
+func (cm *CertificateManager) shouldLoadServerCertificate() bool {
+	return (cm.config.CertFile != "" && cm.config.KeyFile != "") ||
+		(cm.config.CertContent != "" && cm.config.KeyContent != "")
+}
+
+// loadCertificatePair loads the certificate and key pair
+func (cm *CertificateManager) loadCertificatePair() (tls.Certificate, error) {
+	if cm.config.CertContent != "" && cm.config.KeyContent != "" {
+		// Load from content (Vault)
+		return tls.X509KeyPair([]byte(cm.config.CertContent), []byte(cm.config.KeyContent))
+	}
+	// Load from files
+	return tls.LoadX509KeyPair(cm.config.CertFile, cm.config.KeyFile)
+}
+
+// parseCertificateExpiry parses the certificate to extract expiry time
+func (cm *CertificateManager) parseCertificateExpiry(cert *tls.Certificate) error {
+	if len(cert.Certificate) == 0 {
+		return nil
+	}
+
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse server certificate: %w", err)
+	}
+	cm.serverCertExpiry = x509Cert.NotAfter
+	return nil
+}
+
+// loadCACertificate loads the CA certificate for mutual TLS
+func (cm *CertificateManager) loadCACertificate(newCACertPool **x509.CertPool) error {
+	if cm.config.Mode != "mutual" {
+		return nil
+	}
+
+	caCertPool := x509.NewCertPool()
+	var caCert []byte
+	var err error
+
+	if cm.config.CAContent != "" {
+		// Load from content (Vault)
+		caCert = []byte(cm.config.CAContent)
+	} else if cm.config.CAFile != "" {
+		// Load from file
+		caCert, err = os.ReadFile(cm.config.CAFile)
+		if err != nil {
+			return fmt.Errorf("failed to read CA file: %w", err)
+		}
+	}
+
+	if len(caCert) > 0 {
+		if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+			return fmt.Errorf("failed to parse CA certificate")
+		}
+		*newCACertPool = caCertPool
+	}
+
+	return nil
+}
+
+// updateReloadMetrics updates the internal metrics for certificate reloads
+func (cm *CertificateManager) updateReloadMetrics(success bool, err error) {
+	cm.reloadCount++
+	if success {
+		cm.reloadSuccessCount++
+		cm.lastReloadSuccess = true
+		cm.lastReloadError = ""
+	} else {
+		cm.reloadFailureCount++
+		cm.lastReloadSuccess = false
+		if err != nil {
+			cm.lastReloadError = err.Error()
+		}
+	}
+
+	// Record OpenTelemetry metrics
+	cm.recordMetrics(success, err)
+}
+
+// callReloadCallbacks calls all registered reload callbacks
+func (cm *CertificateManager) callReloadCallbacks(success bool, err error) {
+	for _, callback := range cm.reloadCallbacks {
+		go callback(success, err)
+	}
+}
+
 // triggerReload is called by watchers to trigger a certificate reload
 func (cm *CertificateManager) triggerReload() {
 	if cm.logger != nil {
@@ -432,30 +542,35 @@ func (cm *CertificateManager) triggerReload() {
 	}
 
 	if err := cm.loadCertificates(); err != nil {
-		// Update internal metrics for failure
-		cm.mu.Lock()
-		cm.reloadCount++
-		cm.reloadFailureCount++
-		cm.lastReloadSuccess = false
-		cm.lastReloadError = err.Error()
-		cm.mu.Unlock()
+		cm.handleReloadError(err)
+	}
+}
 
-		// Record OpenTelemetry metrics
-		cm.recordMetrics(false, err)
+// handleReloadError handles errors that occur during certificate reload
+func (cm *CertificateManager) handleReloadError(err error) {
+	// Update internal metrics for failure
+	cm.mu.Lock()
+	cm.reloadCount++
+	cm.reloadFailureCount++
+	cm.lastReloadSuccess = false
+	cm.lastReloadError = err.Error()
+	cm.mu.Unlock()
 
-		if cm.logger != nil {
-			cm.logger.LogError(err, "Failed to reload certificates")
-		}
+	// Record OpenTelemetry metrics
+	cm.recordMetrics(false, err)
 
-		// Call reload callbacks with error
-		cm.mu.RLock()
-		callbacks := make([]ReloadCallback, len(cm.reloadCallbacks))
-		copy(callbacks, cm.reloadCallbacks)
-		cm.mu.RUnlock()
+	if cm.logger != nil {
+		cm.logger.LogError(err, "Failed to reload certificates")
+	}
 
-		for _, callback := range callbacks {
-			go callback(false, err)
-		}
+	// Call reload callbacks with error
+	cm.mu.RLock()
+	callbacks := make([]ReloadCallback, len(cm.reloadCallbacks))
+	copy(callbacks, cm.reloadCallbacks)
+	cm.mu.RUnlock()
+
+	for _, callback := range callbacks {
+		go callback(false, err)
 	}
 }
 

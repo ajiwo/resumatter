@@ -27,6 +27,15 @@ ai:
         tailorResumeFile: ""      # Path to custom system prompt file
       userPrompts:
         tailorResumeFile: ""      # Path to custom user prompt file
+    
+    # Circuit breaker configuration (optional, inherits from global if not specified)
+    circuitBreaker:
+      enabled: true
+      maxRequests: 3              # Max requests allowed when half-open
+      interval: 60s               # Interval to clear failure counts
+      timeout: 60s                # Timeout before attempting recovery
+      minRequests: 3              # Minimum requests before circuit can trip
+      failureThreshold: 0.6       # Trip when 60% of requests fail (0.0-1.0)
   
   evaluate:
     provider: "gemini"
@@ -42,6 +51,15 @@ ai:
         evaluateResumeFile: ""
       userPrompts:
         evaluateResumeFile: ""
+    
+    # Circuit breaker configuration (optional, inherits from global if not specified)
+    circuitBreaker:
+      enabled: true
+      maxRequests: 3              # Max requests allowed when half-open
+      interval: 60s               # Interval to clear failure counts
+      timeout: 60s                # Timeout before attempting recovery
+      minRequests: 3              # Minimum requests before circuit can trip
+      failureThreshold: 0.6       # Trip when 60% of requests fail (0.0-1.0)
   
   analyze:
     provider: "gemini"
@@ -57,33 +75,15 @@ ai:
         analyzeJobFile: ""
       userPrompts:
         analyzeJobFile: ""
-
-# Circuit breaker configuration for fault tolerance
-circuitBreaker:
-  enabled: true
-  failureThreshold: 5             # Number of failures before opening circuit
-  resetTimeout: 60s               # Time before attempting to close circuit
-  halfOpenMaxCalls: 3             # Max calls allowed in half-open state
-  
-  # Per-operation circuit breaker settings
-  operations:
-    tailor:
-      enabled: true
-      failureThreshold: 5
-      resetTimeout: 60s
-      halfOpenMaxCalls: 3
     
-    evaluate:
+    # Circuit breaker configuration (optional, inherits from global if not specified)
+    circuitBreaker:
       enabled: true
-      failureThreshold: 5
-      resetTimeout: 60s
-      halfOpenMaxCalls: 3
-    
-    analyze:
-      enabled: true
-      failureThreshold: 5
-      resetTimeout: 60s
-      halfOpenMaxCalls: 3
+      maxRequests: 3              # Max requests allowed when half-open
+      interval: 60s               # Interval to clear failure counts
+      timeout: 60s                # Timeout before attempting recovery
+      minRequests: 3              # Minimum requests before circuit can trip
+      failureThreshold: 0.6       # Trip when 60% of requests fail (0.0-1.0)
 
 # Server configuration
 server:

@@ -170,62 +170,13 @@ func (om *ObservabilityManager) initTracing() error {
 
 // initMetrics sets up OpenTelemetry metrics
 func (om *ObservabilityManager) initMetrics() error {
-	var readers []sdkmetric.Reader
-	var err error
-
-	// Console exporter for development
-	if om.config.ConsoleOutput {
-		exporter, err := stdoutmetric.New()
-		if err != nil {
-			return fmt.Errorf("failed to create console metric exporter: %w", err)
-		}
-		// Use configurable collection interval
-		interval := om.getMetricsCollectionInterval()
-		readers = append(readers, sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(interval)))
-	}
-
-	// OTLP exporter for production metrics
-	if om.fullConfig != nil && om.fullConfig.Observability.OTLP.Enabled {
-		otlpReader, err := om.createOTLPMetricsReader()
-		if err != nil {
-			return fmt.Errorf("failed to create OTLP metrics reader: %w", err)
-		}
-		if otlpReader != nil {
-			readers = append(readers, otlpReader)
-		}
-	}
-
-	// Prometheus exporter for Phase 2
-	if om.config.Prometheus.Enabled {
-		prometheusReader, prometheusMux, err := SetupPrometheusExporter(om.config.Prometheus)
-		if err != nil {
-			return fmt.Errorf("failed to create Prometheus exporter: %w", err)
-		}
-		if prometheusReader != nil {
-			readers = append(readers, prometheusReader)
-			om.prometheusServer = prometheusMux
-
-			// Start Prometheus server
-			if err := StartPrometheusServer(prometheusMux, om.config.Prometheus.Port); err != nil {
-				return fmt.Errorf("failed to start Prometheus server: %w", err)
-			}
-		}
-	}
-
-	// If no readers configured, use manual reader as fallback
-	if len(readers) == 0 {
-		readers = append(readers, sdkmetric.NewManualReader())
+	readers, err := om.setupMetricReaders()
+	if err != nil {
+		return err
 	}
 
 	// Create resource
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(om.config.ServiceName),
-			semconv.ServiceVersion(om.config.ServiceVersion),
-		),
-	)
+	res, err := om.createMetricsResource()
 	if err != nil {
 		return fmt.Errorf("failed to create resource: %w", err)
 	}
@@ -248,11 +199,126 @@ func (om *ObservabilityManager) initMetrics() error {
 	return om.initCustomMetrics()
 }
 
+// setupMetricReaders sets up all metric readers based on configuration
+func (om *ObservabilityManager) setupMetricReaders() ([]sdkmetric.Reader, error) {
+	var readers []sdkmetric.Reader
+
+	// Console exporter for development
+	if err := om.setupConsoleReader(&readers); err != nil {
+		return nil, err
+	}
+
+	// OTLP exporter for production metrics
+	if err := om.setupOTLPReader(&readers); err != nil {
+		return nil, err
+	}
+
+	// Prometheus exporter for Phase 2
+	if err := om.setupPrometheusReader(&readers); err != nil {
+		return nil, err
+	}
+
+	// If no readers configured, use manual reader as fallback
+	if len(readers) == 0 {
+		readers = append(readers, sdkmetric.NewManualReader())
+	}
+
+	return readers, nil
+}
+
+// setupConsoleReader sets up console metric reader if enabled
+func (om *ObservabilityManager) setupConsoleReader(readers *[]sdkmetric.Reader) error {
+	if !om.config.ConsoleOutput {
+		return nil
+	}
+
+	exporter, err := stdoutmetric.New()
+	if err != nil {
+		return fmt.Errorf("failed to create console metric exporter: %w", err)
+	}
+
+	// Use configurable collection interval
+	interval := om.getMetricsCollectionInterval()
+	*readers = append(*readers, sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(interval)))
+	return nil
+}
+
+// setupOTLPReader sets up OTLP metric reader if enabled
+func (om *ObservabilityManager) setupOTLPReader(readers *[]sdkmetric.Reader) error {
+	if om.fullConfig == nil || !om.fullConfig.Observability.OTLP.Enabled {
+		return nil
+	}
+
+	otlpReader, err := om.createOTLPMetricsReader()
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP metrics reader: %w", err)
+	}
+	if otlpReader != nil {
+		*readers = append(*readers, otlpReader)
+	}
+	return nil
+}
+
+// setupPrometheusReader sets up Prometheus metric reader if enabled
+func (om *ObservabilityManager) setupPrometheusReader(readers *[]sdkmetric.Reader) error {
+	if !om.config.Prometheus.Enabled {
+		return nil
+	}
+
+	prometheusReader, prometheusMux, err := SetupPrometheusExporter(om.config.Prometheus)
+	if err != nil {
+		return fmt.Errorf("failed to create Prometheus exporter: %w", err)
+	}
+	if prometheusReader != nil {
+		*readers = append(*readers, prometheusReader)
+		om.prometheusServer = prometheusMux
+
+		// Start Prometheus server
+		if err := StartPrometheusServer(prometheusMux, om.config.Prometheus.Port); err != nil {
+			return fmt.Errorf("failed to start Prometheus server: %w", err)
+		}
+	}
+	return nil
+}
+
+// createMetricsResource creates the OpenTelemetry resource for metrics
+func (om *ObservabilityManager) createMetricsResource() (*resource.Resource, error) {
+	return resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName(om.config.ServiceName),
+			semconv.ServiceVersion(om.config.ServiceVersion),
+		),
+	)
+}
+
 // initCustomMetrics creates all custom metrics for Resumatter
 func (om *ObservabilityManager) initCustomMetrics() error {
 	meter := om.meterProvider.Meter(om.config.ServiceName)
 	om.metrics = &Metrics{}
 
+	if err := om.createAIMetrics(meter); err != nil {
+		return err
+	}
+
+	if err := om.createBusinessMetrics(meter); err != nil {
+		return err
+	}
+
+	if err := om.createCertificateMetrics(meter); err != nil {
+		return err
+	}
+
+	if err := om.createRateLimitMetrics(meter); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// createAIMetrics creates AI-related metrics
+func (om *ObservabilityManager) createAIMetrics(meter metric.Meter) error {
 	var err error
 
 	// AI operation metrics
@@ -291,7 +357,13 @@ func (om *ObservabilityManager) initCustomMetrics() error {
 		return fmt.Errorf("failed to create AI token usage metric: %w", err)
 	}
 
-	// Business metrics
+	return nil
+}
+
+// createBusinessMetrics creates business-related metrics
+func (om *ObservabilityManager) createBusinessMetrics(meter metric.Meter) error {
+	var err error
+
 	om.metrics.ResumesTailored, err = meter.Int64Counter(
 		"resumatter_resumes_tailored_total",
 		metric.WithDescription("Total number of resumes tailored"),
@@ -316,7 +388,13 @@ func (om *ObservabilityManager) initCustomMetrics() error {
 		return fmt.Errorf("failed to create resumes evaluated metric: %w", err)
 	}
 
-	// Certificate metrics
+	return nil
+}
+
+// createCertificateMetrics creates certificate-related metrics
+func (om *ObservabilityManager) createCertificateMetrics(meter metric.Meter) error {
+	var err error
+
 	om.metrics.CertReloadCount, err = meter.Int64Counter(
 		"resumatter_cert_reloads_total",
 		metric.WithDescription("Total number of certificate reloads"),
@@ -335,7 +413,13 @@ func (om *ObservabilityManager) initCustomMetrics() error {
 		return fmt.Errorf("failed to create certificate expiry time metric: %w", err)
 	}
 
-	// Rate limiting metrics
+	return nil
+}
+
+// createRateLimitMetrics creates rate limiting metrics
+func (om *ObservabilityManager) createRateLimitMetrics(meter metric.Meter) error {
+	var err error
+
 	om.metrics.RateLimitHits, err = meter.Int64Counter(
 		"resumatter_rate_limit_hits_total",
 		metric.WithDescription("Total number of rate limit hits"),
@@ -461,10 +545,7 @@ func (m *Metrics) TrackAIOperationWithTokens(ctx context.Context, operation stri
 	}
 
 	// Check if AI operations metrics are enabled
-	aiMetricsEnabled := true
-	if om.fullConfig != nil {
-		aiMetricsEnabled = om.fullConfig.Observability.CustomMetrics.AIOperations.Enabled
-	}
+	aiMetricsEnabled := m.isAIMetricsEnabled(om)
 
 	tracer := otel.Tracer("resumatter.ai")
 	ctx, span := tracer.Start(ctx, "ai."+operation)
@@ -481,51 +562,7 @@ func (m *Metrics) TrackAIOperationWithTokens(ctx context.Context, operation stri
 
 	// Record metrics only if AI operations metrics are enabled
 	if aiMetricsEnabled {
-		attrs := []attribute.KeyValue{
-			attribute.String("operation", operation),
-			attribute.Bool("success", err == nil),
-		}
-
-		// Track duration if enabled
-		if om.fullConfig == nil || om.fullConfig.Observability.CustomMetrics.AIOperations.TrackDuration {
-			m.AIProcessingTime.Record(ctx, duration, metric.WithAttributes(attrs...))
-		}
-
-		m.AIRequestCount.Add(ctx, 1, metric.WithAttributes(attrs...))
-
-		// Record token usage if available and enabled
-		if result != nil && result.TokenUsage != nil && m.AITokenUsage != nil {
-			trackTokenUsage := om.fullConfig == nil || om.fullConfig.Observability.CustomMetrics.AIOperations.TrackTokenUsage
-			if trackTokenUsage {
-				tokenAttrs := append(attrs,
-					attribute.String("token_type", "input"),
-				)
-				m.AITokenUsage.Record(ctx, result.TokenUsage.InputTokens, metric.WithAttributes(tokenAttrs...))
-
-				tokenAttrs = append(attrs[:len(attrs)-1], // Remove previous token_type
-					attribute.String("token_type", "output"),
-				)
-				m.AITokenUsage.Record(ctx, result.TokenUsage.OutputTokens, metric.WithAttributes(tokenAttrs...))
-
-				tokenAttrs = append(attrs[:len(attrs)-1], // Remove previous token_type
-					attribute.String("token_type", "total"),
-				)
-				m.AITokenUsage.Record(ctx, result.TokenUsage.TotalTokens, metric.WithAttributes(tokenAttrs...))
-			}
-
-			// Add token usage to span attributes (always add to traces for debugging)
-			span.SetAttributes(
-				attribute.Int64("ai.tokens.input", result.TokenUsage.InputTokens),
-				attribute.Int64("ai.tokens.output", result.TokenUsage.OutputTokens),
-				attribute.Int64("ai.tokens.total", result.TokenUsage.TotalTokens),
-			)
-		}
-
-		if err != nil {
-			m.AIErrorCount.Add(ctx, 1, metric.WithAttributes(attrs...))
-		}
-
-		span.SetAttributes(attrs...)
+		m.recordAIMetrics(ctx, operation, err, duration, result, om, span)
 	}
 
 	if err != nil {
@@ -534,6 +571,86 @@ func (m *Metrics) TrackAIOperationWithTokens(ctx context.Context, operation stri
 	}
 
 	return err
+}
+
+// isAIMetricsEnabled checks if AI metrics are enabled in the configuration
+func (m *Metrics) isAIMetricsEnabled(om *ObservabilityManager) bool {
+	if om.fullConfig == nil {
+		return true
+	}
+	return om.fullConfig.Observability.CustomMetrics.AIOperations.Enabled
+}
+
+// recordAIMetrics records all AI-related metrics
+func (m *Metrics) recordAIMetrics(ctx context.Context, operation string, err error, duration float64, result *AIOperationResult, om *ObservabilityManager, span oteltrace.Span) {
+	attrs := []attribute.KeyValue{
+		attribute.String("operation", operation),
+		attribute.Bool("success", err == nil),
+	}
+
+	m.recordAIDuration(ctx, duration, attrs, om)
+	m.recordAIRequestCount(ctx, attrs)
+	m.recordTokenUsage(ctx, result, attrs, om, span)
+	m.recordAIError(ctx, err, attrs)
+
+	span.SetAttributes(attrs...)
+}
+
+// recordAIDuration records AI processing duration if enabled
+func (m *Metrics) recordAIDuration(ctx context.Context, duration float64, attrs []attribute.KeyValue, om *ObservabilityManager) {
+	if om.fullConfig == nil || om.fullConfig.Observability.CustomMetrics.AIOperations.TrackDuration {
+		m.AIProcessingTime.Record(ctx, duration, metric.WithAttributes(attrs...))
+	}
+}
+
+// recordAIRequestCount records AI request count
+func (m *Metrics) recordAIRequestCount(ctx context.Context, attrs []attribute.KeyValue) {
+	m.AIRequestCount.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
+
+// recordAIError records AI error count if there was an error
+func (m *Metrics) recordAIError(ctx context.Context, err error, attrs []attribute.KeyValue) {
+	if err != nil {
+		m.AIErrorCount.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+}
+
+// recordTokenUsage records token usage metrics and span attributes
+func (m *Metrics) recordTokenUsage(ctx context.Context, result *AIOperationResult, attrs []attribute.KeyValue, om *ObservabilityManager, span oteltrace.Span) {
+	if result == nil || result.TokenUsage == nil || m.AITokenUsage == nil {
+		return
+	}
+
+	trackTokenUsage := om.fullConfig == nil || om.fullConfig.Observability.CustomMetrics.AIOperations.TrackTokenUsage
+	if trackTokenUsage {
+		m.recordTokenMetrics(ctx, result.TokenUsage, attrs)
+	}
+
+	// Add token usage to span attributes (always add to traces for debugging)
+	span.SetAttributes(
+		attribute.Int64("ai.tokens.input", result.TokenUsage.InputTokens),
+		attribute.Int64("ai.tokens.output", result.TokenUsage.OutputTokens),
+		attribute.Int64("ai.tokens.total", result.TokenUsage.TotalTokens),
+	)
+}
+
+// recordTokenMetrics records individual token usage metrics
+func (m *Metrics) recordTokenMetrics(ctx context.Context, tokenUsage *TokenUsage, attrs []attribute.KeyValue) {
+	tokenTypes := []struct {
+		tokenType string
+		value     int64
+	}{
+		{"input", tokenUsage.InputTokens},
+		{"output", tokenUsage.OutputTokens},
+		{"total", tokenUsage.TotalTokens},
+	}
+
+	for _, tt := range tokenTypes {
+		tokenAttrs := append(attrs[:len(attrs)-1], // Remove previous token_type
+			attribute.String("token_type", tt.tokenType),
+		)
+		m.AITokenUsage.Record(ctx, tt.value, metric.WithAttributes(tokenAttrs...))
+	}
 }
 
 // RecordBusinessMetric records business-specific metrics
@@ -547,27 +664,52 @@ func (m *Metrics) RecordBusinessMetric(ctx context.Context, metricType string, s
 		attribute.Bool("success", success),
 	}, attributes...)
 
+	m.recordMetricByType(ctx, metricType, attrs, om)
+}
+
+// recordMetricByType records the appropriate metric based on the metric type
+func (m *Metrics) recordMetricByType(ctx context.Context, metricType string, attrs []attribute.KeyValue, om *ObservabilityManager) {
 	switch metricType {
 	case "resume_tailored":
-		if m.ResumesTailored != nil {
-			m.ResumesTailored.Add(ctx, 1, metric.WithAttributes(attrs...))
-		}
+		m.recordResumeTailored(ctx, attrs)
 	case "job_analyzed":
-		if m.JobsAnalyzed != nil {
-			m.JobsAnalyzed.Add(ctx, 1, metric.WithAttributes(attrs...))
-		}
+		m.recordJobAnalyzed(ctx, attrs)
 	case "resume_evaluated":
-		if m.ResumesEvaluated != nil {
-			m.ResumesEvaluated.Add(ctx, 1, metric.WithAttributes(attrs...))
-		}
+		m.recordResumeEvaluated(ctx, attrs)
 	case "rate_limit_hit":
-		// Rate limiting is an infrastructure metric
-		if om != nil && om.fullConfig != nil && !om.fullConfig.Observability.CustomMetrics.Infrastructure.TrackRateLimits {
-			return
-		}
-		if m.RateLimitHits != nil {
-			m.RateLimitHits.Add(ctx, 1, metric.WithAttributes(attrs...))
-		}
+		m.recordRateLimitHit(ctx, attrs, om)
+	}
+}
+
+// recordResumeTailored records resume tailored metric
+func (m *Metrics) recordResumeTailored(ctx context.Context, attrs []attribute.KeyValue) {
+	if m.ResumesTailored != nil {
+		m.ResumesTailored.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+}
+
+// recordJobAnalyzed records job analyzed metric
+func (m *Metrics) recordJobAnalyzed(ctx context.Context, attrs []attribute.KeyValue) {
+	if m.JobsAnalyzed != nil {
+		m.JobsAnalyzed.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+}
+
+// recordResumeEvaluated records resume evaluated metric
+func (m *Metrics) recordResumeEvaluated(ctx context.Context, attrs []attribute.KeyValue) {
+	if m.ResumesEvaluated != nil {
+		m.ResumesEvaluated.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+}
+
+// recordRateLimitHit records rate limit hit metric
+func (m *Metrics) recordRateLimitHit(ctx context.Context, attrs []attribute.KeyValue, om *ObservabilityManager) {
+	// Rate limiting is an infrastructure metric
+	if om != nil && om.fullConfig != nil && !om.fullConfig.Observability.CustomMetrics.Infrastructure.TrackRateLimits {
+		return
+	}
+	if m.RateLimitHits != nil {
+		m.RateLimitHits.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}
 }
 

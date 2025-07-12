@@ -69,23 +69,49 @@ func (cw *CertWatcher) Start() error {
 		return fmt.Errorf("certificate watcher is already running")
 	}
 
-	// Create file system watcher
+	if err := cw.initializeWatcher(); err != nil {
+		return err
+	}
+
+	filesToWatch := cw.collectFilesToWatch()
+	cw.addFilesToWatcher(filesToWatch)
+
+	cw.running = true
+	go cw.watchLoop()
+
+	cw.logWatcherStarted(filesToWatch)
+	return nil
+}
+
+// initializeWatcher creates and initializes the file system watcher
+func (cw *CertWatcher) initializeWatcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("failed to create file watcher: %w", err)
 	}
 	cw.fsWatcher = watcher
 
-	// Get initial file modification times
 	if err := cw.updateModTimes(); err != nil {
-		if closeErr := cw.fsWatcher.Close(); closeErr != nil && cw.logger != nil {
-			cw.logger.LogError(closeErr, "Failed to close file watcher during cleanup")
-		}
+		cw.cleanupWatcher()
 		return fmt.Errorf("failed to get initial file modification times: %w", err)
 	}
 
-	// Add certificate files to watcher
-	filesToWatch := []string{}
+	return nil
+}
+
+// cleanupWatcher closes the file watcher and logs any errors
+func (cw *CertWatcher) cleanupWatcher() {
+	if cw.fsWatcher != nil {
+		if closeErr := cw.fsWatcher.Close(); closeErr != nil && cw.logger != nil {
+			cw.logger.LogError(closeErr, "Failed to close file watcher during cleanup")
+		}
+	}
+}
+
+// collectFilesToWatch gathers all certificate files that need to be watched
+func (cw *CertWatcher) collectFilesToWatch() []string {
+	var filesToWatch []string
+
 	if cw.certFile != "" {
 		filesToWatch = append(filesToWatch, cw.certFile)
 	}
@@ -96,27 +122,25 @@ func (cw *CertWatcher) Start() error {
 		filesToWatch = append(filesToWatch, cw.caFile)
 	}
 
+	return filesToWatch
+}
+
+// addFilesToWatcher adds all files to the file system watcher
+func (cw *CertWatcher) addFilesToWatcher(filesToWatch []string) {
 	for _, file := range filesToWatch {
-		// Watch both the file and its directory to catch atomic writes
-		if err := cw.addFileToWatcher(file); err != nil {
-			if cw.logger != nil {
-				cw.logger.Warn("Failed to watch certificate file", "file", file, "error", err)
-			}
+		if err := cw.addFileToWatcher(file); err != nil && cw.logger != nil {
+			cw.logger.Warn("Failed to watch certificate file", "file", file, "error", err)
 		}
 	}
+}
 
-	cw.running = true
-
-	// Start the watch loop
-	go cw.watchLoop()
-
+// logWatcherStarted logs that the watcher has been started
+func (cw *CertWatcher) logWatcherStarted(filesToWatch []string) {
 	if cw.logger != nil {
 		cw.logger.Info("Certificate file watcher started",
 			"files", filesToWatch,
 			"debounce_delay", cw.debounceDelay)
 	}
-
-	return nil
 }
 
 // Stop stops the certificate file watcher

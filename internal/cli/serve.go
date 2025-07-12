@@ -37,11 +37,14 @@ func init() {
 	serveCmd.Flags().String("ca-file", "", "CA certificate file for client cert verification (PEM, overrides config)")
 
 	// Bind flags to viper config keys
-	bindFlag := func(key, flagName string) error {
-		return viper.BindPFlag(key, serveCmd.Flags().Lookup(flagName))
+	bindFlag := func(key, flagName string) {
+		if err := viper.BindPFlag(key, serveCmd.Flags().Lookup(flagName)); err != nil {
+			// This is a developer error, so panicking is appropriate here.
+			panic(fmt.Sprintf("failed to bind flag %s to config key %s: %v", flagName, key, err))
+		}
 	}
 
-	// Bind all flags and handle any errors
+	// Bind all flags - any failure is a developer error
 	flagBindings := map[string]string{
 		"server.port":         "port",
 		"server.host":         "host",
@@ -52,10 +55,7 @@ func init() {
 	}
 
 	for configKey, flagName := range flagBindings {
-		if err := bindFlag(configKey, flagName); err != nil {
-			// Log the error but don't fail initialization - this is a setup issue
-			fmt.Printf("Warning: failed to bind flag %s to config key %s: %v\n", flagName, configKey, err)
-		}
+		bindFlag(configKey, flagName)
 	}
 }
 

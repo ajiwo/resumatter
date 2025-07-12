@@ -223,60 +223,78 @@ func (c *Config) validatePromptFiles() error {
 func (c *Config) logPromptLoadingSummary() {
 	log.Println("[CONFIG] === Custom Prompt Loading Summary ===")
 
+	promptCount := c.countAndLogLoadedPrompts()
+
+	c.logPromptSummaryFooter(promptCount)
+}
+
+// countAndLogLoadedPrompts counts and logs all loaded prompts, returning the total count
+func (c *Config) countAndLogLoadedPrompts() int {
 	promptCount := 0
 
 	// Check global prompts
-	if loadedPrompts.Global.SystemPrompts.TailorResume != "" {
-		log.Println("[CONFIG] Global system tailor prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Global.SystemPrompts.EvaluateResume != "" {
-		log.Println("[CONFIG] Global system evaluate prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Global.SystemPrompts.AnalyzeJob != "" {
-		log.Println("[CONFIG] Global system analyze prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Global.UserPrompts.TailorResume != "" {
-		log.Println("[CONFIG] Global user tailor prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Global.UserPrompts.EvaluateResume != "" {
-		log.Println("[CONFIG] Global user evaluate prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Global.UserPrompts.AnalyzeJob != "" {
-		log.Println("[CONFIG] Global user analyze prompt: loaded from config/file")
-		promptCount++
-	}
+	promptCount += c.logGlobalPrompts()
 
 	// Check operation-specific prompts
-	if loadedPrompts.Tailor.SystemPrompts.TailorResume != "" {
-		log.Println("[CONFIG] Tailor-specific system prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Tailor.UserPrompts.TailorResume != "" {
-		log.Println("[CONFIG] Tailor-specific user prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Evaluate.SystemPrompts.EvaluateResume != "" {
-		log.Println("[CONFIG] Evaluate-specific system prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Evaluate.UserPrompts.EvaluateResume != "" {
-		log.Println("[CONFIG] Evaluate-specific user prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Analyze.SystemPrompts.AnalyzeJob != "" {
-		log.Println("[CONFIG] Analyze-specific system prompt: loaded from config/file")
-		promptCount++
-	}
-	if loadedPrompts.Analyze.UserPrompts.AnalyzeJob != "" {
-		log.Println("[CONFIG] Analyze-specific user prompt: loaded from config/file")
-		promptCount++
+	promptCount += c.logOperationSpecificPrompts()
+
+	return promptCount
+}
+
+// logGlobalPrompts logs global prompt status and returns count
+func (c *Config) logGlobalPrompts() int {
+	count := 0
+
+	promptChecks := []struct {
+		content string
+		message string
+	}{
+		{loadedPrompts.Global.SystemPrompts.TailorResume, "[CONFIG] Global system tailor prompt: loaded from config/file"},
+		{loadedPrompts.Global.SystemPrompts.EvaluateResume, "[CONFIG] Global system evaluate prompt: loaded from config/file"},
+		{loadedPrompts.Global.SystemPrompts.AnalyzeJob, "[CONFIG] Global system analyze prompt: loaded from config/file"},
+		{loadedPrompts.Global.UserPrompts.TailorResume, "[CONFIG] Global user tailor prompt: loaded from config/file"},
+		{loadedPrompts.Global.UserPrompts.EvaluateResume, "[CONFIG] Global user evaluate prompt: loaded from config/file"},
+		{loadedPrompts.Global.UserPrompts.AnalyzeJob, "[CONFIG] Global user analyze prompt: loaded from config/file"},
 	}
 
+	for _, check := range promptChecks {
+		if check.content != "" {
+			log.Println(check.message)
+			count++
+		}
+	}
+
+	return count
+}
+
+// logOperationSpecificPrompts logs operation-specific prompt status and returns count
+func (c *Config) logOperationSpecificPrompts() int {
+	count := 0
+
+	promptChecks := []struct {
+		content string
+		message string
+	}{
+		{loadedPrompts.Tailor.SystemPrompts.TailorResume, "[CONFIG] Tailor-specific system prompt: loaded from config/file"},
+		{loadedPrompts.Tailor.UserPrompts.TailorResume, "[CONFIG] Tailor-specific user prompt: loaded from config/file"},
+		{loadedPrompts.Evaluate.SystemPrompts.EvaluateResume, "[CONFIG] Evaluate-specific system prompt: loaded from config/file"},
+		{loadedPrompts.Evaluate.UserPrompts.EvaluateResume, "[CONFIG] Evaluate-specific user prompt: loaded from config/file"},
+		{loadedPrompts.Analyze.SystemPrompts.AnalyzeJob, "[CONFIG] Analyze-specific system prompt: loaded from config/file"},
+		{loadedPrompts.Analyze.UserPrompts.AnalyzeJob, "[CONFIG] Analyze-specific user prompt: loaded from config/file"},
+	}
+
+	for _, check := range promptChecks {
+		if check.content != "" {
+			log.Println(check.message)
+			count++
+		}
+	}
+
+	return count
+}
+
+// logPromptSummaryFooter logs the summary footer with total count
+func (c *Config) logPromptSummaryFooter(promptCount int) {
 	if promptCount == 0 {
 		log.Println("[CONFIG] No custom prompts loaded - using built-in defaults")
 	} else {

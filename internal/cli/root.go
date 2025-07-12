@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	"resumatter/internal/config"
 	"resumatter/internal/errors"
@@ -34,19 +35,19 @@ func Execute(ctx context.Context, cfg *config.Config, logger *errors.Logger) err
 }
 
 // getConfigFromContext is a helper function to get config from context
-func getConfigFromContext(ctx context.Context) *config.Config {
+func getConfigFromContext(ctx context.Context) (*config.Config, error) {
 	if cfg, ok := ctx.Value(configKey).(*config.Config); ok {
-		return cfg
+		return cfg, nil
 	}
-	panic("config not found in context") // Should not happen if properly initialized
+	return nil, fmt.Errorf("config not found in context - ensure Execute() was called with proper initialization")
 }
 
 // getLoggerFromContext is a helper function to get logger from context
-func getLoggerFromContext(ctx context.Context) *errors.Logger {
+func getLoggerFromContext(ctx context.Context) (*errors.Logger, error) {
 	if logger, ok := ctx.Value(loggerKey).(*errors.Logger); ok {
-		return logger
+		return logger, nil
 	}
-	panic("logger not found in context") // Should not happen if properly initialized
+	return nil, fmt.Errorf("logger not found in context - ensure Execute() was called with proper initialization")
 }
 
 func init() {

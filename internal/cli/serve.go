@@ -37,23 +37,37 @@ func init() {
 	serveCmd.Flags().String("ca-file", "", "CA certificate file for client cert verification (PEM, overrides config)")
 
 	// Bind flags to viper config keys
-	bindFlag := func(key, flagName string) {
-		if err := viper.BindPFlag(key, serveCmd.Flags().Lookup(flagName)); err != nil {
-			panic(err)
-		}
+	bindFlag := func(key, flagName string) error {
+		return viper.BindPFlag(key, serveCmd.Flags().Lookup(flagName))
 	}
 
-	bindFlag("server.port", "port")
-	bindFlag("server.host", "host")
-	bindFlag("server.tls.mode", "tls-mode")
-	bindFlag("server.tls.certfile", "cert-file")
-	bindFlag("server.tls.keyfile", "key-file")
-	bindFlag("server.tls.cafile", "ca-file")
+	// Bind all flags and handle any errors
+	flagBindings := map[string]string{
+		"server.port":         "port",
+		"server.host":         "host",
+		"server.tls.mode":     "tls-mode",
+		"server.tls.certfile": "cert-file",
+		"server.tls.keyfile":  "key-file",
+		"server.tls.cafile":   "ca-file",
+	}
+
+	for configKey, flagName := range flagBindings {
+		if err := bindFlag(configKey, flagName); err != nil {
+			// Log the error but don't fail initialization - this is a setup issue
+			fmt.Printf("Warning: failed to bind flag %s to config key %s: %v\n", flagName, configKey, err)
+		}
+	}
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
-	cfg := getConfigFromContext(cmd.Context())
-	logger := getLoggerFromContext(cmd.Context())
+	cfg, err := getConfigFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
+	logger, err := getLoggerFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
 
 	// Validate TLS configuration after applying overrides
 	tempConfig := &config.Config{Server: cfg.Server}

@@ -20,7 +20,10 @@ The command takes two arguments: the path to the base resume file and
 the path to the tailored resume file.`,
 	Args: cobra.ExactArgs(2),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return err
+		}
 		// Apply default format if not specified
 		if evaluateConfig.OutputFormat == "" {
 			evaluateConfig.OutputFormat = cfg.App.DefaultFormat
@@ -39,14 +42,23 @@ func init() {
 
 	// Add completion for format flag
 	_ = evaluateCmd.RegisterFlagCompletionFunc("format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return []string{}, cobra.ShellCompDirectiveError
+		}
 		return common.GetSupportedFormats(cfg.App.SupportedFormats), cobra.ShellCompDirectiveNoFileComp
 	})
 }
 
 func runEvaluate(cmd *cobra.Command, args []string) error {
-	cfg := getConfigFromContext(cmd.Context())
-	logger := getLoggerFromContext(cmd.Context())
+	cfg, err := getConfigFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
+	logger, err := getLoggerFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
 
 	// Create AI service for evaluate operation
 	evaluateAIConfig := cfg.GetEvaluateConfig()

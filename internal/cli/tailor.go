@@ -19,7 +19,10 @@ The command takes two arguments: the path to your base resume file and
 the path to the job description file. Both files should be in plain text format.`,
 	Args: cobra.ExactArgs(2),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return err
+		}
 		// Apply default format if not specified
 		if tailorConfig.OutputFormat == "" {
 			tailorConfig.OutputFormat = cfg.App.DefaultFormat
@@ -38,14 +41,23 @@ func init() {
 
 	// Add completion for format flag
 	_ = tailorCmd.RegisterFlagCompletionFunc("format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return []string{}, cobra.ShellCompDirectiveError
+		}
 		return common.GetSupportedFormats(cfg.App.SupportedFormats), cobra.ShellCompDirectiveNoFileComp
 	})
 }
 
 func runTailor(cmd *cobra.Command, args []string) error {
-	cfg := getConfigFromContext(cmd.Context())
-	logger := getLoggerFromContext(cmd.Context())
+	cfg, err := getConfigFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
+	logger, err := getLoggerFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
 
 	// Create AI service for tailor operation
 	tailorAIConfig := cfg.GetTailorConfig()

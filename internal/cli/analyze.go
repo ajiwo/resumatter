@@ -26,7 +26,10 @@ The analysis includes:
 - Market competitiveness evaluation`,
 	Args: cobra.ExactArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return err
+		}
 		// Apply default format if not specified
 		if analyzeConfig.OutputFormat == "" {
 			analyzeConfig.OutputFormat = cfg.App.DefaultFormat
@@ -45,14 +48,23 @@ func init() {
 
 	// Add completion for format flag
 	_ = analyzeCmd.RegisterFlagCompletionFunc("format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		cfg := getConfigFromContext(cmd.Context())
+		cfg, err := getConfigFromContext(cmd.Context())
+		if err != nil {
+			return []string{}, cobra.ShellCompDirectiveError
+		}
 		return common.GetSupportedFormats(cfg.App.SupportedFormats), cobra.ShellCompDirectiveNoFileComp
 	})
 }
 
 func runAnalyze(cmd *cobra.Command, args []string) error {
-	cfg := getConfigFromContext(cmd.Context())
-	logger := getLoggerFromContext(cmd.Context())
+	cfg, err := getConfigFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
+	logger, err := getLoggerFromContext(cmd.Context())
+	if err != nil {
+		return err
+	}
 
 	// Create AI service for analyze operation
 	analyzeAIConfig := cfg.GetAnalyzeConfig()

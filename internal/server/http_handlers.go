@@ -25,6 +25,19 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := s.buildHealthResponse()
+	overallHealthy := s.determineOverallHealth(response)
+
+	if !overallHealthy {
+		response["status"] = "degraded"
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	s.writeHealthResponse(w, response)
+}
+
+// buildHealthResponse constructs the health check response with all status information
+func (s *Server) buildHealthResponse() map[string]any {
 	response := map[string]any{
 		"status":  "healthy",
 		"service": "resumatter",
@@ -45,33 +58,73 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		response["certificates"] = certStatus
 	}
 
-	// Determine overall health status
-	overallHealthy := true
-	for _, modelStatus := range aiStatus {
-		if modelInfo, ok := modelStatus.(map[string]any); ok {
-			if available, exists := modelInfo["available"]; exists {
-				if avail, ok := available.(bool); ok && !avail {
-					overallHealthy = false
-					break
-				}
-			}
-		}
+	return response
+}
+
+// determineOverallHealth evaluates the overall system health based on component statuses
+func (s *Server) determineOverallHealth(response map[string]any) bool {
+	// Check AI models health
+	if !s.isAIModelsHealthy(response) {
+		return false
 	}
 
 	// Check certificate health
-	if certStatus != nil {
-		if healthy, exists := certStatus["healthy"]; exists {
-			if certHealthy, ok := healthy.(bool); ok && !certHealthy {
-				overallHealthy = false
-			}
+	if !s.isCertificateHealthy(response) {
+		return false
+	}
+
+	return true
+}
+
+// isAIModelsHealthy checks if all AI models are available
+func (s *Server) isAIModelsHealthy(response map[string]any) bool {
+	aiStatus, exists := response["ai_models"].(map[string]any)
+	if !exists {
+		return true
+	}
+
+	for _, modelStatus := range aiStatus {
+		if !s.isModelAvailable(modelStatus) {
+			return false
 		}
 	}
+	return true
+}
 
-	if !overallHealthy {
-		response["status"] = "degraded"
-		w.WriteHeader(http.StatusServiceUnavailable)
+// isModelAvailable checks if a specific AI model is available
+func (s *Server) isModelAvailable(modelStatus any) bool {
+	modelInfo, ok := modelStatus.(map[string]any)
+	if !ok {
+		return true
 	}
 
+	available, exists := modelInfo["available"]
+	if !exists {
+		return true
+	}
+
+	avail, ok := available.(bool)
+	return !ok || avail
+}
+
+// isCertificateHealthy checks if certificates are healthy
+func (s *Server) isCertificateHealthy(response map[string]any) bool {
+	certStatus, exists := response["certificates"].(map[string]any)
+	if !exists {
+		return true
+	}
+
+	healthy, exists := certStatus["healthy"]
+	if !exists {
+		return true
+	}
+
+	certHealthy, ok := healthy.(bool)
+	return !ok || certHealthy
+}
+
+// writeHealthResponse writes the health response to the HTTP response writer
+func (s *Server) writeHealthResponse(w http.ResponseWriter, response map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	err := json.NewEncoder(w).Encode(response)
 	if err != nil {

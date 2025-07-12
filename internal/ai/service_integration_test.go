@@ -23,7 +23,64 @@ var testLogger = errors.NewLogger(slog.LevelDebug)
 func TestOperationSpecificConfigDerivation(t *testing.T) {
 	// Set up a mock config with different settings for each operation,
 	// mirroring the new dependency injection pattern.
-	testConfig := &config.Config{
+	testConfig := createTestConfigWithOverrides()
+
+	testCases := []struct {
+		name           string
+		getConfig      func() config.OperationAIConfig
+		expectedValues map[string]interface{}
+		fallbackValues map[string]interface{}
+	}{
+		{
+			name:      "TailorConfigDerivation",
+			getConfig: testConfig.GetTailorConfig,
+			expectedValues: map[string]interface{}{
+				"Model":       "tailor-specific-model",
+				"Timeout":     90 * time.Second,
+				"Temperature": float32(0.3),
+			},
+			fallbackValues: map[string]interface{}{
+				"APIKey":     "global-api-key",
+				"MaxRetries": 5,
+			},
+		},
+		{
+			name:      "EvaluateConfigDerivation",
+			getConfig: testConfig.GetEvaluateConfig,
+			expectedValues: map[string]interface{}{
+				"Model":      "evaluate-specific-model",
+				"MaxRetries": 1,
+			},
+			fallbackValues: map[string]interface{}{
+				"Timeout": 60 * time.Second,
+			},
+		},
+		{
+			name:           "AnalyzeConfigDerivation",
+			getConfig:      testConfig.GetAnalyzeConfig,
+			expectedValues: map[string]interface{}{
+				// All values should fall back to global defaults
+			},
+			fallbackValues: map[string]interface{}{
+				"Model":   "global-model",
+				"Timeout": 60 * time.Second,
+				"APIKey":  "global-api-key",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.getConfig()
+			assertConfigValues(t, cfg, tc.expectedValues, tc.fallbackValues)
+			assertServiceCreation(t, cfg, tc.name)
+		})
+	}
+}
+
+// createTestConfigWithOverrides creates a test config with operation-specific overrides
+func createTestConfigWithOverrides() *config.Config {
+	return &config.Config{
 		AI: config.AIConfig{
 			// Global defaults that should be used as fallbacks
 			Provider:         "gemini",
@@ -53,67 +110,61 @@ func TestOperationSpecificConfigDerivation(t *testing.T) {
 			},
 		},
 	}
+}
 
-	t.Run("TailorConfigDerivation", func(t *testing.T) {
-		// 1. Test the config derivation logic
-		tailorCfg := testConfig.GetTailorConfig()
+// assertConfigValues verifies that config values match expected and fallback values
+func assertConfigValues(t *testing.T, cfg config.OperationAIConfig, expectedValues, fallbackValues map[string]interface{}) {
+	t.Helper()
 
-		// 2. Assert that the derived config is correct
-		if tailorCfg.Model != "tailor-specific-model" {
-			t.Errorf("Expected tailor model 'tailor-specific-model', got '%s'", tailorCfg.Model)
-		}
-		if *tailorCfg.Timeout != 90*time.Second {
-			t.Errorf("Expected tailor timeout 90s, got %v", *tailorCfg.Timeout)
-		}
-		if *tailorCfg.Temperature != 0.3 {
-			t.Errorf("Expected tailor temperature 0.3, got %f", *tailorCfg.Temperature)
-		}
-		// Assert fallback behavior
-		if tailorCfg.APIKey != "global-api-key" {
-			t.Errorf("Expected tailor APIKey to fall back to 'global-api-key', got '%s'", tailorCfg.APIKey)
-		}
-		if *tailorCfg.MaxRetries != 5 {
-			t.Errorf("Expected tailor MaxRetries to fall back to 5, got %d", *tailorCfg.MaxRetries)
-		}
+	// Check expected overrides
+	for key, expected := range expectedValues {
+		assertConfigValue(t, cfg, key, expected)
+	}
 
-		// 3. (Optional but good) Verify service can be created with this derived config
-		_, err := NewService(&tailorCfg, "tailor", testLogger)
-		if err != nil {
-			// We expect an error due to the dummy API key, but not a panic.
-			// This confirms the factory function can consume the derived config.
-			t.Logf("Received expected error when creating service with test key: %v", err)
-		}
-	})
+	// Check fallback values
+	for key, expected := range fallbackValues {
+		assertConfigValue(t, cfg, key, expected)
+	}
+}
 
-	t.Run("EvaluateConfigDerivation", func(t *testing.T) {
-		evaluateCfg := testConfig.GetEvaluateConfig()
+// assertConfigValue checks a specific config value
+func assertConfigValue(t *testing.T, cfg config.OperationAIConfig, key string, expected interface{}) {
+	t.Helper()
 
-		if evaluateCfg.Model != "evaluate-specific-model" {
-			t.Errorf("Expected evaluate model 'evaluate-specific-model', got '%s'", evaluateCfg.Model)
+	switch key {
+	case "Model":
+		if cfg.Model != expected.(string) {
+			t.Errorf("Expected %s '%s', got '%s'", key, expected, cfg.Model)
 		}
-		if *evaluateCfg.MaxRetries != 1 {
-			t.Errorf("Expected evaluate MaxRetries to be 1, got %d", *evaluateCfg.MaxRetries)
+	case "Timeout":
+		if *cfg.Timeout != expected.(time.Duration) {
+			t.Errorf("Expected %s %v, got %v", key, expected, *cfg.Timeout)
 		}
-		// Assert fallback behavior
-		if *evaluateCfg.Timeout != 60*time.Second {
-			t.Errorf("Expected evaluate timeout to fall back to 60s, got %v", *evaluateCfg.Timeout)
+	case "Temperature":
+		if *cfg.Temperature != expected.(float32) {
+			t.Errorf("Expected %s %f, got %f", key, expected, *cfg.Temperature)
 		}
-	})
+	case "APIKey":
+		if cfg.APIKey != expected.(string) {
+			t.Errorf("Expected %s '%s', got '%s'", key, expected, cfg.APIKey)
+		}
+	case "MaxRetries":
+		if *cfg.MaxRetries != expected.(int) {
+			t.Errorf("Expected %s %d, got %d", key, expected, *cfg.MaxRetries)
+		}
+	}
+}
 
-	t.Run("AnalyzeConfigDerivation", func(t *testing.T) {
-		analyzeCfg := testConfig.GetAnalyzeConfig()
+// assertServiceCreation verifies that a service can be created with the derived config
+func assertServiceCreation(t *testing.T, cfg config.OperationAIConfig, operation string) {
+	t.Helper()
 
-		// Assert all values fall back to global defaults
-		if analyzeCfg.Model != "global-model" {
-			t.Errorf("Expected analyze model to fall back to 'global-model', got '%s'", analyzeCfg.Model)
-		}
-		if *analyzeCfg.Timeout != 60*time.Second {
-			t.Errorf("Expected analyze timeout to fall back to 60s, got %v", *analyzeCfg.Timeout)
-		}
-		if analyzeCfg.APIKey != "global-api-key" {
-			t.Errorf("Expected analyze APIKey to fall back to 'global-api-key', got '%s'", analyzeCfg.APIKey)
-		}
-	})
+	_, err := NewService(&cfg, operation, testLogger)
+	if err != nil {
+		// We expect an error due to the dummy API key, but not a panic.
+		// This confirms the factory function can consume the derived config.
+		t.Logf("Received expected error when creating service with test key: %v", err)
+	}
 }
 
 func TestCircuitBreakerIntegrationWithServices(t *testing.T) {

@@ -11,143 +11,142 @@ func TestIndependentCircuitBreakerConfigurations(t *testing.T) {
 	// Test that each operation gets its own circuit breaker configuration
 	// as specified in config.example.yaml
 
-	// Create different configurations for each operation (matching config.example.yaml)
-	tailorConfig := &config.OperationAIConfig{
-		Provider: "gemini",
-		Model:    "gemini-2.5-pro",
-		CircuitBreaker: config.CircuitBreakerConfig{
-			Enabled:          true,
-			MaxRequests:      3,
-			Interval:         60 * time.Second,
-			Timeout:          60 * time.Second,
-			MinRequests:      3,
-			FailureThreshold: 0.6,
+	testCases := []struct {
+		name           string
+		config         *config.OperationAIConfig
+		expectedCBName string
+	}{
+		{
+			name: "Tailor",
+			config: &config.OperationAIConfig{
+				Provider: "gemini",
+				Model:    "gemini-2.5-pro",
+				CircuitBreaker: config.CircuitBreakerConfig{
+					Enabled:          true,
+					MaxRequests:      3,
+					Interval:         60 * time.Second,
+					Timeout:          60 * time.Second,
+					MinRequests:      3,
+					FailureThreshold: 0.6,
+				},
+			},
+			expectedCBName: "AI-Tailor",
+		},
+		{
+			name: "Evaluate",
+			config: &config.OperationAIConfig{
+				Provider: "gemini",
+				Model:    "gemini-2.0-flash-lite",
+				CircuitBreaker: config.CircuitBreakerConfig{
+					Enabled:          true,
+					MaxRequests:      5,
+					Interval:         30 * time.Second,
+					Timeout:          45 * time.Second,
+					MinRequests:      2,
+					FailureThreshold: 0.7,
+				},
+			},
+			expectedCBName: "AI-Evaluate",
+		},
+		{
+			name: "Analyze",
+			config: &config.OperationAIConfig{
+				Provider: "gemini",
+				Model:    "gemini-1.5-pro",
+				CircuitBreaker: config.CircuitBreakerConfig{
+					Enabled:          true,
+					MaxRequests:      4,
+					Interval:         90 * time.Second,
+					Timeout:          75 * time.Second,
+					MinRequests:      5,
+					FailureThreshold: 0.5,
+				},
+			},
+			expectedCBName: "AI-Analyze",
 		},
 	}
 
-	evaluateConfig := &config.OperationAIConfig{
-		Provider: "gemini",
-		Model:    "gemini-2.0-flash-lite",
-		CircuitBreaker: config.CircuitBreakerConfig{
-			Enabled:          true,
-			MaxRequests:      5,                // Different from tailor
-			Interval:         30 * time.Second, // Different from tailor
-			Timeout:          45 * time.Second, // Different from tailor
-			MinRequests:      2,                // Different from tailor
-			FailureThreshold: 0.7,              // Different from tailor
-		},
+	// Create circuit breakers for all operations
+	circuitBreakers := make(map[string]*AICircuitBreaker)
+	for _, tc := range testCases {
+		circuitBreakers[tc.name] = NewAICircuitBreaker(tc.name, tc.config, nil)
 	}
 
-	analyzeConfig := &config.OperationAIConfig{
-		Provider: "gemini",
-		Model:    "gemini-1.5-pro",
-		CircuitBreaker: config.CircuitBreakerConfig{
-			Enabled:          true,
-			MaxRequests:      4,                // Different from others
-			Interval:         90 * time.Second, // Different from others
-			Timeout:          75 * time.Second, // Different from others
-			MinRequests:      5,                // Different from others
-			FailureThreshold: 0.5,              // Different from others
-		},
+	// Test each circuit breaker configuration
+	for _, tc := range testCases {
+		t.Run(tc.name+"CircuitBreaker", func(t *testing.T) {
+			cb := circuitBreakers[tc.name]
+			assertCircuitBreakerBasicProperties(t, cb, tc.expectedCBName)
+		})
 	}
 
-	// Create circuit breakers for each operation
-	tailorCB := NewAICircuitBreaker("Tailor", tailorConfig, nil)
-	evaluateCB := NewAICircuitBreaker("Evaluate", evaluateConfig, nil)
-	analyzeCB := NewAICircuitBreaker("Analyze", analyzeConfig, nil)
-
-	// Verify that each circuit breaker has independent configuration
-	t.Run("TailorCircuitBreaker", func(t *testing.T) {
-		stats := tailorCB.GetStats()
-
-		// Check that tailor circuit breaker exists and has correct name
-		name, ok := stats["name"].(string)
-		if !ok {
-			t.Fatal("Circuit breaker name not found")
-		}
-
-		expectedName := "AI-Tailor"
-		if name != expectedName {
-			t.Errorf("Expected circuit breaker name '%s', got '%s'", expectedName, name)
-		}
-
-		// Verify it's in closed state initially
-		state, ok := stats["state"].(string)
-		if !ok {
-			t.Fatal("Circuit breaker state not found")
-		}
-		if state != "closed" {
-			t.Errorf("Expected initial state 'closed', got '%s'", state)
-		}
-
-		// Verify it's enabled
-		enabled, ok := stats["enabled"].(bool)
-		if !ok {
-			t.Fatal("Circuit breaker enabled status not found")
-		}
-		if !enabled {
-			t.Error("Circuit breaker should be enabled")
-		}
-	})
-
-	t.Run("EvaluateCircuitBreaker", func(t *testing.T) {
-		stats := evaluateCB.GetStats()
-
-		name, ok := stats["name"].(string)
-		if !ok {
-			t.Fatal("Circuit breaker name not found")
-		}
-
-		expectedName := "AI-Evaluate"
-		if name != expectedName {
-			t.Errorf("Expected circuit breaker name '%s', got '%s'", expectedName, name)
-		}
-	})
-
-	t.Run("AnalyzeCircuitBreaker", func(t *testing.T) {
-		stats := analyzeCB.GetStats()
-
-		name, ok := stats["name"].(string)
-		if !ok {
-			t.Fatal("Circuit breaker name not found")
-		}
-
-		expectedName := "AI-Analyze"
-		if name != expectedName {
-			t.Errorf("Expected circuit breaker name '%s', got '%s'", expectedName, name)
-		}
-	})
-
-	// Verify that circuit breakers are independent (different instances)
+	// Test independence
 	t.Run("IndependentInstances", func(t *testing.T) {
-		if tailorCB == evaluateCB {
-			t.Error("Tailor and evaluate circuit breakers should be different instances")
-		}
-		if tailorCB == analyzeCB {
-			t.Error("Tailor and analyze circuit breakers should be different instances")
-		}
-		if evaluateCB == analyzeCB {
-			t.Error("Evaluate and analyze circuit breakers should be different instances")
-		}
+		assertCircuitBreakersAreIndependent(t, circuitBreakers)
 	})
 
-	// Verify that health states are independent
 	t.Run("IndependentHealthStates", func(t *testing.T) {
-		tailorHealthy := tailorCB.IsHealthy()
-		evaluateHealthy := evaluateCB.IsHealthy()
-		analyzeHealthy := analyzeCB.IsHealthy()
-
-		// All should be healthy initially
-		if !tailorHealthy {
-			t.Error("Tailor circuit breaker should be healthy initially")
-		}
-		if !evaluateHealthy {
-			t.Error("Evaluate circuit breaker should be healthy initially")
-		}
-		if !analyzeHealthy {
-			t.Error("Analyze circuit breaker should be healthy initially")
-		}
+		assertAllCircuitBreakersHealthy(t, circuitBreakers)
 	})
+}
+
+// assertCircuitBreakerBasicProperties verifies basic circuit breaker properties
+func assertCircuitBreakerBasicProperties(t *testing.T, cb *AICircuitBreaker, expectedName string) {
+	t.Helper()
+
+	stats := cb.GetStats()
+
+	// Check name
+	name, ok := stats["name"].(string)
+	if !ok {
+		t.Fatal("Circuit breaker name not found")
+	}
+	if name != expectedName {
+		t.Errorf("Expected circuit breaker name '%s', got '%s'", expectedName, name)
+	}
+
+	// Check initial state
+	state, ok := stats["state"].(string)
+	if !ok {
+		t.Fatal("Circuit breaker state not found")
+	}
+	if state != "closed" {
+		t.Errorf("Expected initial state 'closed', got '%s'", state)
+	}
+
+	// Check enabled status
+	enabled, ok := stats["enabled"].(bool)
+	if !ok {
+		t.Fatal("Circuit breaker enabled status not found")
+	}
+	if !enabled {
+		t.Error("Circuit breaker should be enabled")
+	}
+}
+
+// assertCircuitBreakersAreIndependent verifies that circuit breakers are different instances
+func assertCircuitBreakersAreIndependent(t *testing.T, cbs map[string]*AICircuitBreaker) {
+	t.Helper()
+
+	operations := []string{"Tailor", "Evaluate", "Analyze"}
+	for i := 0; i < len(operations); i++ {
+		for j := i + 1; j < len(operations); j++ {
+			if cbs[operations[i]] == cbs[operations[j]] {
+				t.Errorf("%s and %s circuit breakers should be different instances", operations[i], operations[j])
+			}
+		}
+	}
+}
+
+// assertAllCircuitBreakersHealthy verifies that all circuit breakers are initially healthy
+func assertAllCircuitBreakersHealthy(t *testing.T, cbs map[string]*AICircuitBreaker) {
+	t.Helper()
+
+	for name, cb := range cbs {
+		if !cb.IsHealthy() {
+			t.Errorf("%s circuit breaker should be healthy initially", name)
+		}
+	}
 }
 
 func TestCircuitBreakerConfigurationMapping(t *testing.T) {
